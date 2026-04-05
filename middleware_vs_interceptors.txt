@@ -1,0 +1,15 @@
+Middleware                              Interceptors
+─────────                               ────────────
+before_node(shared, ctx)
+  │
+  ├── prep(shared, params) → prep_res
+  │
+  │   ┌─ before_exec(prep_res, ctx) ─┐
+  │   │                               │
+  │   │   exec(prep_res, params)      │  ← interceptors wrap HERE
+  │   │                               │
+  │   └─ after_exec(exec_res, ctx) ──┘
+  │
+  ├── post(shared, prep_res, exec_res, params)
+  │
+after_node(shared, action, ctx)

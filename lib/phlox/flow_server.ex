@@ -1,6 +1,6 @@
 defmodule Phlox.FlowServer do
   @moduledoc """
-  An OTP `GenServer` wrapper around `Phlox.Runner`.
+  An OTP `GenServer` wrapper around `Phlox.Runner` and `Phlox.Pipeline`.
 
   Holds a `%Phlox.Flow{}` and the current `shared` state as GenServer state,
   enabling:
@@ -13,6 +13,11 @@ defmodule Phlox.FlowServer do
     observe intermediate state between steps.
   - **Full run** — run all nodes to completion in one `call`, blocking until
     done or an error occurs.
+  - **Middleware support** — when `:middlewares` is provided, uses
+    `Phlox.Pipeline` instead of `Phlox.Runner`, enabling checkpointing,
+    cost tracking, and other composable hooks.
+  - **Resume from checkpoint** — pass `:resume` to start from a previously
+    saved checkpoint instead of the flow's `start_id`.
 
   ## Usage
 
@@ -39,6 +44,27 @@ defmodule Phlox.FlowServer do
       # Reset to re-run with the same or new shared
       :ok = Phlox.FlowServer.reset(pid, %{url: "https://other.com"})
 
+  ## With middlewares and checkpointing
+
+      {:ok, pid} = Phlox.FlowServer.start_link(
+        flow: my_flow,
+        shared: %{url: "..."},
+        middlewares: [Phlox.Middleware.Checkpoint],
+        run_id: "ingest-001",
+        metadata: %{
+          checkpoint: {Phlox.Checkpoint.Ecto, repo: MyApp.Repo},
+          flow_name: "IngestPipeline"
+        }
+      )
+
+  ## Resume from checkpoint
+
+      {:ok, pid} = Phlox.FlowServer.start_link(
+        flow: my_flow,
+        resume: "ingest-001",
+        checkpoint: {Phlox.Checkpoint.Memory, []}
+      )
+
   ## Status values
 
   - `:ready`    — not yet started
@@ -50,7 +76,7 @@ defmodule Phlox.FlowServer do
 
   use GenServer
 
-  alias Phlox.Runner
+  alias Phlox.{Pipeline, Runner}
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -64,6 +90,11 @@ defmodule Phlox.FlowServer do
   - `flow:` (**required**) — a `%Phlox.Flow{}` struct
   - `shared:` (default `%{}`) — initial shared state
   - `name:` — optional GenServer name (atom, `{:global, name}`, or `{:via, ...}`)
+  - `middlewares:` — list of `Phlox.Middleware` modules (enables Pipeline mode)
+  - `run_id:` — identifier for this flow execution (auto-generated if omitted)
+  - `metadata:` — arbitrary map passed through middleware context
+  - `resume:` — run_id string to resume from a checkpoint (requires `checkpoint:`)
+  - `checkpoint:` — `{adapter, opts}` tuple for resume support
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -82,6 +113,9 @@ defmodule Phlox.FlowServer do
   - `{:continue, next_node_id, current_shared}` — more nodes remain
   - `{:done, final_shared}` — the flow has finished
   - `{:error, exception}` — a node raised fatally
+
+  When middlewares are configured, `before_node` and `after_node` hooks
+  fire for each step.
   """
   @spec step(GenServer.server()) :: {:continue, atom(), map()} | {:done, map()} | {:error, Exception.t()}
   def step(server), do: GenServer.call(server, :step, :infinity)
@@ -104,18 +138,43 @@ defmodule Phlox.FlowServer do
   @impl GenServer
   def init(opts) do
     flow = Keyword.fetch!(opts, :flow)
-    shared = Keyword.get(opts, :shared, %{})
+    middlewares = Keyword.get(opts, :middlewares, [])
+    run_id = Keyword.get(opts, :run_id) || generate_run_id()
+    metadata = Keyword.get(opts, :metadata, %{})
+
+    # Handle resume from checkpoint
+    {shared, current_id} =
+      case Keyword.get(opts, :resume) do
+        nil ->
+          shared = Keyword.get(opts, :shared, %{})
+          {shared, flow.start_id}
+
+        resume_run_id ->
+          load_resume_checkpoint(resume_run_id, flow, opts)
+      end
+
+    # If checkpoint adapter is provided but not in metadata, inject it
+    metadata =
+      case Keyword.get(opts, :checkpoint) do
+        nil -> metadata
+        cp_config -> Map.put_new(metadata, :checkpoint, cp_config)
+      end
 
     state = %{
       flow: flow,
       initial_shared: shared,
       shared: shared,
-      current_id: flow.start_id,
-      status: :ready
+      current_id: current_id,
+      status: :ready,
+      middlewares: middlewares,
+      run_id: run_id,
+      metadata: metadata
     }
 
     {:ok, state}
   end
+
+  # --- run ---
 
   @impl GenServer
   def handle_call(:run, _from, %{status: status} = state)
@@ -128,7 +187,7 @@ defmodule Phlox.FlowServer do
 
     result =
       try do
-        final_shared = Runner.orchestrate(state.flow, state.current_id, state.shared)
+        final_shared = orchestrate(state)
         {:ok, final_shared}
       rescue
         e -> {:error, e}
@@ -144,6 +203,8 @@ defmodule Phlox.FlowServer do
         {:reply, {:error, exc}, error_state}
     end
   end
+
+  # --- step ---
 
   @impl GenServer
   def handle_call(:step, _from, %{status: :done} = state) do
@@ -162,11 +223,27 @@ defmodule Phlox.FlowServer do
     node = Map.fetch!(state.flow.nodes, state.current_id)
     params = node.params
 
+    ctx = %{
+      node_id: node.id,
+      node: node,
+      flow: state.flow,
+      run_id: state.run_id,
+      metadata: state.metadata
+    }
+
     result =
       try do
-        prep_res = node.module.prep(state.shared, params)
+        # Before hooks
+        shared = run_before(state.middlewares, state.shared, ctx)
+
+        # Node execution
+        prep_res = node.module.prep(shared, params)
         exec_res = Phlox.Retry.run(node, prep_res)
-        {action, new_shared} = node.module.post(state.shared, prep_res, exec_res, params)
+        {action, new_shared} = node.module.post(shared, prep_res, exec_res, params)
+
+        # After hooks (reverse order)
+        {new_shared, action} = run_after(Enum.reverse(state.middlewares), new_shared, action, ctx)
+
         {:ok, action, new_shared}
       rescue
         e -> {:error, e}
@@ -190,16 +267,21 @@ defmodule Phlox.FlowServer do
     end
   end
 
+  # --- state ---
+
   @impl GenServer
   def handle_call(:state, _from, state) do
     snapshot = %{
       shared: state.shared,
       current_id: state.current_id,
-      status: state.status
+      status: state.status,
+      run_id: state.run_id
     }
 
     {:reply, snapshot, state}
   end
+
+  # --- reset ---
 
   @impl GenServer
   def handle_call({:reset, new_shared}, _from, state) do
@@ -209,7 +291,8 @@ defmodule Phlox.FlowServer do
       state
       | shared: shared,
         current_id: state.flow.start_id,
-        status: :ready
+        status: :ready,
+        run_id: generate_run_id()
     }
 
     {:reply, :ok, new_state}
@@ -219,12 +302,109 @@ defmodule Phlox.FlowServer do
   # Private helpers
   # ---------------------------------------------------------------------------
 
+  # Choose Runner (no middlewares) or Pipeline (with middlewares)
+  defp orchestrate(state) do
+    if state.middlewares == [] do
+      Runner.orchestrate(state.flow, state.current_id, state.shared)
+    else
+      Pipeline.orchestrate(state.flow, state.current_id, state.shared,
+        middlewares: state.middlewares,
+        run_id: state.run_id,
+        metadata: state.metadata
+      )
+    end
+  end
+
+  # Middleware runners for step mode (same logic as Pipeline)
+
+  defp run_before([], shared, _ctx), do: shared
+
+  defp run_before([mw | rest], shared, ctx) do
+    if has_callback?(mw, :before_node, 2) do
+      case mw.before_node(shared, ctx) do
+        {:cont, shared} ->
+          run_before(rest, shared, ctx)
+
+        {:halt, reason} ->
+          raise Phlox.HaltedError,
+            reason: reason,
+            node_id: ctx.node_id,
+            middleware: mw,
+            phase: :before_node
+      end
+    else
+      run_before(rest, shared, ctx)
+    end
+  end
+
+  defp run_after([], shared, action, _ctx), do: {shared, action}
+
+  defp run_after([mw | rest], shared, action, ctx) do
+    if has_callback?(mw, :after_node, 3) do
+      case mw.after_node(shared, action, ctx) do
+        {:cont, shared, action} ->
+          run_after(rest, shared, action, ctx)
+
+        {:halt, reason} ->
+          raise Phlox.HaltedError,
+            reason: reason,
+            node_id: ctx.node_id,
+            middleware: mw,
+            phase: :after_node
+      end
+    else
+      run_after(rest, shared, action, ctx)
+    end
+  end
+
+  defp has_callback?(module, function, arity) do
+    Code.ensure_loaded?(module) and function_exported?(module, function, arity)
+  end
+
   defp resolve_next(flow, node, action) do
     action_key = if action == :default, do: "default", else: action
 
     case Map.get(node.successors, action_key) do
       nil -> nil
       next_id -> Map.fetch!(flow.nodes, next_id)
+    end
+  end
+
+  defp generate_run_id do
+    :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
+  end
+
+  defp load_resume_checkpoint(resume_run_id, flow, opts) do
+    {adapter, adapter_opts} =
+      case Keyword.fetch(opts, :checkpoint) do
+        {:ok, {a, o}} -> {a, o}
+        _ -> raise ArgumentError,
+               "Phlox.FlowServer :resume requires a :checkpoint option, e.g. " <>
+                 "checkpoint: {Phlox.Checkpoint.Memory, []}"
+      end
+
+    case adapter.load_latest(resume_run_id, adapter_opts) do
+      {:ok, %{next_node_id: nil}} ->
+        raise ArgumentError,
+              "Phlox.FlowServer: flow #{inspect(resume_run_id)} has already completed — nothing to resume"
+
+      {:ok, %{next_node_id: next_id, shared: shared}} ->
+        unless Map.has_key?(flow.nodes, next_id) do
+          raise ArgumentError,
+                "Phlox.FlowServer: checkpoint targets node :#{next_id} " <>
+                  "but it doesn't exist in the flow. " <>
+                  "Known nodes: #{inspect(Map.keys(flow.nodes))}"
+        end
+
+        {shared, next_id}
+
+      {:error, :not_found} ->
+        raise ArgumentError,
+              "Phlox.FlowServer: no checkpoint found for run_id #{inspect(resume_run_id)}"
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "Phlox.FlowServer: failed to load checkpoint: #{inspect(reason)}"
     end
   end
 end
