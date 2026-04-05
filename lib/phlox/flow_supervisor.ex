@@ -23,13 +23,13 @@ defmodule Phlox.FlowSupervisor do
       {:ok, pid} = Phlox.FlowSupervisor.start_flow(:my_flow, flow, %{url: "https://example.com"})
 
       # Run to completion
-      {:ok, result} = Phlox.FlowServer.run(:my_flow)
+      {:ok, result} = Phlox.FlowServer.run(Phlox.FlowSupervisor.server(:my_flow))
 
       # Inspect mid-run
-      %{shared: shared, status: status} = Phlox.FlowServer.state(:my_flow)
+      %{shared: shared, status: status} = Phlox.FlowServer.state(Phlox.FlowSupervisor.server(:my_flow))
 
       # Step through manually
-      {:continue, next_id, shared} = Phlox.FlowServer.step(:my_flow)
+      {:continue, next_id, shared} = Phlox.FlowServer.step(Phlox.FlowSupervisor.server(:my_flow))
 
   ## Looking up live flows
 
@@ -62,9 +62,31 @@ defmodule Phlox.FlowSupervisor do
   # Public API
   # ---------------------------------------------------------------------------
 
-  @doc "Start the FlowSupervisor (and its companion Registry)."
+  @doc """
+  Start the FlowSupervisor.
+
+  ## Options
+
+  - `max_restarts:` (default `3`) — maximum number of child restarts allowed
+    within `max_seconds` before the supervisor itself terminates. Only
+    meaningful when individual flows use `restart: :permanent` or
+    `restart: :transient`.
+  - `max_seconds:` (default `5`) — the sliding window (in seconds) over which
+    `max_restarts` is counted.
+  - `name:` — registered name (default: `Phlox.FlowSupervisor`).
+
+  ### Tuning for long-running agent loops
+
+      Phlox.FlowSupervisor.start_link(max_restarts: 10, max_seconds: 60)
+
+  ### Tighten for high-churn short flows
+
+      Phlox.FlowSupervisor.start_link(max_restarts: 2, max_seconds: 10)
+  """
   def start_link(opts \\ []) do
-    DynamicSupervisor.start_link(__MODULE__, opts, name: __MODULE__)
+    {gen_opts, init_opts} = Keyword.split(opts, [:name])
+    name = Keyword.get(gen_opts, :name, __MODULE__)
+    DynamicSupervisor.start_link(__MODULE__, init_opts, name: name)
   end
 
   @doc """
@@ -85,16 +107,16 @@ defmodule Phlox.FlowSupervisor do
     restart = Keyword.get(opts, :restart, :temporary)
 
     child_spec = %{
-      id: {FlowServer, name},
-      start: {FlowServer, :start_link, [[flow: flow, shared: shared, name: via(name)]]},
+      id:      {FlowServer, name},
+      start:   {FlowServer, :start_link, [[flow: flow, shared: shared, name: via(name)]]},
       restart: restart,
-      type: :worker
+      type:    :worker
     }
 
     case DynamicSupervisor.start_child(__MODULE__, child_spec) do
-      {:ok, pid} -> {:ok, pid}
+      {:ok, pid}                        -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:error, {:already_started, pid}}
-      {:error, reason} -> {:error, reason}
+      {:error, reason}                  -> {:error, reason}
     end
   end
 
@@ -157,8 +179,15 @@ defmodule Phlox.FlowSupervisor do
   # ---------------------------------------------------------------------------
 
   @impl DynamicSupervisor
-  def init(_opts) do
-    DynamicSupervisor.init(strategy: :one_for_one)
+  def init(opts) do
+    max_restarts = Keyword.get(opts, :max_restarts, 3)
+    max_seconds  = Keyword.get(opts, :max_seconds, 5)
+
+    DynamicSupervisor.init(
+      strategy:     :one_for_one,
+      max_restarts: max_restarts,
+      max_seconds:  max_seconds
+    )
   end
 
   # ---------------------------------------------------------------------------

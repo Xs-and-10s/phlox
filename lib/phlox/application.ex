@@ -10,6 +10,11 @@ defmodule Phlox.Application do
       # Must start before FlowSupervisor so via-tuples resolve immediately.
       {Registry, keys: :unique, name: Phlox.FlowRegistry},
 
+      # Real-time flow monitoring — ETS-backed, telemetry-attached.
+      # Must start before FlowSupervisor so events from the first spawned
+      # flow are captured.
+      Phlox.Monitor,
+
       # DynamicSupervisor that spawns and supervises FlowServer processes.
       Phlox.FlowSupervisor
     ]
