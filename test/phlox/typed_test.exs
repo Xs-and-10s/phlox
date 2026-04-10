@@ -127,7 +127,7 @@ defmodule Phlox.TypedTest do
   # Helpers
   # ===========================================================================
 
-  defp node_entry(id, module, params \\ %{}, successors \\ %{}) do
+  defp node_entry(id, module, params, successors \\ %{}) do
     {id, %{
       id: id,
       module: module,
@@ -353,7 +353,7 @@ defmodule Phlox.TypedTest do
     test "validation fires at every node boundary" do
       # Node A: requires :url, produces :body
       # Node B: requires :body (via input spec), untyped output
-      flow = two_node_flow(BothSpecsNode, StrictInputNode)
+      _flow = two_node_flow(BothSpecsNode, StrictInputNode)
 
       # StrictInputNode needs :text and :language, but BothSpecsNode
       # doesn't produce those. So let's set up a flow that works:
