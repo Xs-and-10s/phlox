@@ -49,11 +49,11 @@ defmodule Phlox.InterceptorTest do
     @behaviour Phlox.Interceptor
 
     @impl true
-    def before_exec(_prep_res, ctx) do
+    def before_exec(prep_res, ctx) do
       if ctx.interceptor_opts[:force_hit] do
         {:skip, %{cached: true, value: ctx.interceptor_opts[:cached_value]}}
       else
-        {:cont, _prep_res}
+        {:cont, prep_res}
       end
     end
   end

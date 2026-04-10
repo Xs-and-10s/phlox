@@ -43,7 +43,7 @@ defmodule Phlox.MonitorTest do
         kind: :error, reason: %RuntimeError{message: reason}})
   end
 
-  defp flow_stop(flow_id, status \\ :ok) do
+  defp flow_stop(flow_id, status) do
     emit([:phlox, :flow, :stop],
       %{duration: System.convert_time_unit(100, :millisecond, :native)},
       %{flow_id: flow_id, status: status})
