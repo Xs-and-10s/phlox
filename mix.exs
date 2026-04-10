@@ -26,7 +26,9 @@ defmodule Phlox.MixProject do
       {:telemetry, "~> 1.0"},
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
-      {:gladius, "~> 0.6.0"}
+      {:gladius, "~> 0.6.0"},
+      # mix.exs
+      {:req, "~> 0.5"},
     ]
   end
 end
