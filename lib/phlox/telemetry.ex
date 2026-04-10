@@ -29,7 +29,8 @@ defmodule Phlox.Telemetry do
                       kind: :error | :exit | :throw, reason: term()}
 
   ### `[:phlox, :flow, :start]`
-  Emitted when `Phlox.Flow.run/2` is called.
+  Emitted when `Phlox.Pipeline.orchestrate/4` begins (including via
+  `Phlox.FlowServer.run/1`).
 
       measurements: %{system_time: integer()}
       metadata:     %{flow_id: term(), start_id: atom()}
@@ -57,18 +58,20 @@ defmodule Phlox.Telemetry do
 
   ## `flow_id`
 
-  By default `flow_id` is a random reference generated per `Flow.run/2` call,
-  ensuring events from concurrent flows are distinguishable. Supply a stable,
-  human-readable ID via the `:phlox_flow_id` key in `shared`:
+  `Pipeline` and `FlowServer` guarantee that `:phlox_flow_id` is present
+  in `shared` — if the caller omits it, the `run_id` is used as a fallback.
+  This means `Phlox.Monitor.subscribe/1` always has a stable ID to match on.
+
+  Supply a human-readable ID via the `:phlox_flow_id` key in `shared`:
 
       job_id = "import-job-" <> Integer.to_string(job.id)
-      Phlox.Flow.run(flow, %{phlox_flow_id: job_id})
+      Phlox.Pipeline.orchestrate(flow, flow.start_id, %{phlox_flow_id: job_id})
   """
 
   @telemetry_available Code.ensure_loaded?(:telemetry)
 
   # ---------------------------------------------------------------------------
-  # Public emit functions — called by Runner, Flow, and FlowServer
+  # Public emit functions — called by Pipeline (and FlowServer step mode)
   # ---------------------------------------------------------------------------
 
   @doc false

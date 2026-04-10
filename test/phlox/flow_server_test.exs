@@ -84,7 +84,12 @@ defmodule Phlox.FlowServerTest do
     snap = FlowServer.state(pid)
     assert snap.status == :ready
     assert snap.current_id == :incr
-    assert snap.shared == %{}
+
+    # FlowServer injects :phlox_flow_id (from run_id) when the user omits it
+    assert is_binary(snap.shared.phlox_flow_id)
+    assert String.length(snap.shared.phlox_flow_id) == 32
+    assert snap.flow_id == snap.shared.phlox_flow_id
+    assert Map.delete(snap.shared, :phlox_flow_id) == %{}
   end
 
   # ---------------------------------------------------------------------------

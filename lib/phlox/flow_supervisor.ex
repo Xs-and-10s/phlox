@@ -26,10 +26,20 @@ defmodule Phlox.FlowSupervisor do
       {:ok, result} = Phlox.FlowServer.run(Phlox.FlowSupervisor.server(:my_flow))
 
       # Inspect mid-run
-      %{shared: shared, status: status} = Phlox.FlowServer.state(Phlox.FlowSupervisor.server(:my_flow))
+      %{shared: shared, status: status, flow_id: fid} =
+        Phlox.FlowServer.state(Phlox.FlowSupervisor.server(:my_flow))
 
       # Step through manually
       {:continue, next_id, shared} = Phlox.FlowServer.step(Phlox.FlowSupervisor.server(:my_flow))
+
+  ## With middlewares
+
+      {:ok, _pid} = Phlox.FlowSupervisor.start_flow(:my_flow, flow,
+        %{phlox_flow_id: "job-42", url: "https://example.com"},
+        middlewares: [Phlox.Middleware.Checkpoint],
+        run_id: "job-42",
+        metadata: %{flow_name: "IngestPipeline"}
+      )
 
   ## Looking up live flows
 
@@ -97,6 +107,9 @@ defmodule Phlox.FlowSupervisor do
   - `shared`  — initial shared state map (default `%{}`)
   - `opts`    — keyword options:
       - `restart:` — `:temporary` (default) | `:permanent` | `:transient`
+      - `middlewares:` — list of `Phlox.Middleware` modules (forwarded to FlowServer)
+      - `run_id:` — execution identifier (forwarded to FlowServer)
+      - `metadata:` — arbitrary map (forwarded to FlowServer)
 
   Returns `{:ok, pid}` or `{:error, {:already_started, pid}}` if a flow
   with that name is already running.
@@ -104,11 +117,12 @@ defmodule Phlox.FlowSupervisor do
   @spec start_flow(term(), Phlox.Flow.t(), map(), keyword()) ::
           {:ok, pid()} | {:error, term()}
   def start_flow(name, flow, shared \\ %{}, opts \\ []) do
-    restart = Keyword.get(opts, :restart, :temporary)
+    {restart, server_opts} = Keyword.pop(opts, :restart, :temporary)
 
     child_spec = %{
       id:      {FlowServer, name},
-      start:   {FlowServer, :start_link, [[flow: flow, shared: shared, name: via(name)]]},
+      start:   {FlowServer, :start_link,
+                [Keyword.merge(server_opts, flow: flow, shared: shared, name: via(name))]},
       restart: restart,
       type:    :worker
     }

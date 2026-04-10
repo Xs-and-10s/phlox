@@ -279,7 +279,10 @@ defmodule Phlox.PipelineTest do
   describe "orchestrate/4 without middlewares" do
     test "runs a single-node flow" do
       result = Pipeline.orchestrate(single_node_flow(), :a, %{hello: :world})
-      assert result == %{hello: :world}
+      assert result.hello == :world
+      # Pipeline injects :phlox_flow_id when not provided by the caller
+      assert is_binary(result.phlox_flow_id)
+      assert Map.delete(result, :phlox_flow_id) == %{hello: :world}
     end
 
     test "runs a two-node pipeline and threads shared" do
@@ -296,7 +299,10 @@ defmodule Phlox.PipelineTest do
       flow = single_node_flow()
       # Doesn't crash — run_id is generated internally
       result = Pipeline.orchestrate(flow, :a, %{})
-      assert result == %{}
+      # The auto-generated run_id is also injected as :phlox_flow_id
+      assert is_binary(result.phlox_flow_id)
+      assert String.length(result.phlox_flow_id) == 32
+      assert Map.delete(result, :phlox_flow_id) == %{}
     end
 
     test "raises ArgumentError for unknown start node" do

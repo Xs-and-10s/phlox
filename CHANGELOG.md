@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.1] — 2026-04-10
+
+### Fixed
+
+- **Pipeline now emits telemetry.** `Phlox.Pipeline.orchestrate/4` emits all five
+  `Phlox.Telemetry` events (flow start/stop, node start/stop/exception). Previously
+  neither Runner nor Pipeline called any telemetry functions, leaving `Phlox.Monitor`
+  completely blind.
+- **FlowServer always uses Pipeline.** `FlowServer.run/1` now dispatches to
+  `Pipeline.orchestrate/4` regardless of whether middlewares are configured, ensuring
+  telemetry fires for every execution. `Phlox.Runner` remains available for
+  side-effect-free use (e.g. property-based tests).
+- **Flow.run/2 uses Pipeline.** The convenience entry point now emits telemetry and
+  injects `:phlox_flow_id`, matching the behaviour of FlowServer and Pipeline.
+- **FlowSupervisor.start_flow/4 forwards opts.** `middlewares:`, `run_id:`, and
+  `metadata:` are now passed through to `FlowServer.start_link/1`. Previously these
+  options were silently dropped.
+- **`:phlox_flow_id` auto-injected.** Pipeline, FlowServer, and Flow.run now inject
+  `run_id` as `:phlox_flow_id` in `shared` when the caller omits it. This guarantees
+  `Monitor.subscribe/1` always has a stable, discoverable ID to correlate events with.
+  The `make_ref()` fallback in `Telemetry.flow_id/1` is now unreachable from all
+  standard execution paths.
+- **FlowServer.state/1** snapshot now includes `flow_id` for easy discovery.
+- **FlowServer.reset/2** re-injects `:phlox_flow_id` using the freshly generated `run_id`.
+
 ## [0.3.0] — 2026-04-10
 
 ### Added

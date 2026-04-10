@@ -2,8 +2,8 @@ defmodule Phlox.Monitor do
   @moduledoc """
   A GenServer that tracks the state of running flows in real time.
 
-  `Phlox.Monitor` attaches to `:telemetry` events emitted by `Phlox.Runner`
-  and `Phlox.Flow`, maintaining a per-flow snapshot in ETS. Subscribers
+  `Phlox.Monitor` attaches to `:telemetry` events emitted by `Phlox.Pipeline`
+  and `Phlox.FlowServer`, maintaining a per-flow snapshot in ETS. Subscribers
   (LiveView processes, SSE handlers, tests) receive a message whenever
   a flow or node transitions.
 

@@ -9,11 +9,17 @@ defmodule Phlox.Flow do
       {:ok, flow} = Graph.new() |> Graph.add_node(...) |> ... |> Graph.to_flow()
       {:ok, final_shared} = Phlox.Flow.run(flow, %{initial: "state"})
 
-  `run/2` delegates to `Phlox.Runner` and returns `{:ok, final_shared}`.
-  Any unhandled exception from a node propagates as `{:error, exception}`.
+  `run/2` delegates to `Phlox.Pipeline` (with no middlewares), so
+  telemetry events fire and `Phlox.Monitor` can track the execution.
+
+  If `:phlox_flow_id` is not present in `shared`, a random ID is
+  injected automatically. See `Phlox.Telemetry` for details.
+
+  For a side-effect-free execution path (no telemetry), call
+  `Phlox.Runner.orchestrate/3` directly.
   """
 
-  alias Phlox.Runner
+  alias Phlox.Pipeline
 
   @enforce_keys [:start_id, :nodes]
   defstruct [:start_id, nodes: %{}]
@@ -28,11 +34,14 @@ defmodule Phlox.Flow do
 
   Returns `{:ok, final_shared}` on success, `{:error, exception}` if a node
   raises and all retries + fallbacks are exhausted.
+
+  `final_shared` will contain a `:phlox_flow_id` key (user-supplied or
+  auto-generated) used for telemetry correlation.
   """
   @spec run(t(), map()) :: {:ok, map()} | {:error, Exception.t()}
   def run(%__MODULE__{} = flow, shared \\ %{}) do
     try do
-      final_shared = Runner.orchestrate(flow, flow.start_id, shared)
+      final_shared = Pipeline.orchestrate(flow, flow.start_id, shared)
       {:ok, final_shared}
     rescue
       e -> {:error, e}

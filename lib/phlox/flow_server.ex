@@ -1,6 +1,6 @@
 defmodule Phlox.FlowServer do
   @moduledoc """
-  An OTP `GenServer` wrapper around `Phlox.Runner` and `Phlox.Pipeline`.
+  An OTP `GenServer` wrapper around `Phlox.Pipeline`.
 
   Holds a `%Phlox.Flow{}` and the current `shared` state as GenServer state,
   enabling:
@@ -13,11 +13,27 @@ defmodule Phlox.FlowServer do
     observe intermediate state between steps.
   - **Full run** — run all nodes to completion in one `call`, blocking until
     done or an error occurs.
-  - **Middleware support** — when `:middlewares` is provided, uses
-    `Phlox.Pipeline` instead of `Phlox.Runner`, enabling checkpointing,
+  - **Middleware support** — pass `:middlewares` to enable checkpointing,
     cost tracking, and other composable hooks.
+  - **Telemetry** — all executions emit `Phlox.Telemetry` events, enabling
+    `Phlox.Monitor` to track flow progress in real time. This works
+    regardless of whether middlewares are configured.
   - **Resume from checkpoint** — pass `:resume` to start from a previously
     saved checkpoint instead of the flow's `start_id`.
+
+  ## Flow ID
+
+  If `shared` does not contain a `:phlox_flow_id` key, FlowServer
+  automatically injects one using the `run_id`. This guarantees that
+  `Phlox.Monitor.subscribe/1` can always correlate events to a flow.
+  You can set it explicitly for human-readable IDs:
+
+      shared = %{phlox_flow_id: "import-job-42", url: "https://example.com"}
+
+  Or discover the auto-generated one after startup:
+
+      %{flow_id: fid} = Phlox.FlowServer.state(pid)
+      Phlox.Monitor.subscribe(fid)
 
   ## Usage
 
@@ -39,7 +55,8 @@ defmodule Phlox.FlowServer do
       {:done, final_shared}        = Phlox.FlowServer.step(pid)
 
       # Inspect state at any point
-      %{shared: shared, current_id: id, status: status} = Phlox.FlowServer.state(pid)
+      %{shared: shared, current_id: id, status: status, flow_id: fid} =
+        Phlox.FlowServer.state(pid)
 
       # Reset to re-run with the same or new shared
       :ok = Phlox.FlowServer.reset(pid, %{url: "https://other.com"})
@@ -76,7 +93,7 @@ defmodule Phlox.FlowServer do
 
   use GenServer
 
-  alias Phlox.{Pipeline, Runner}
+  alias Phlox.Pipeline
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -120,7 +137,17 @@ defmodule Phlox.FlowServer do
   @spec step(GenServer.server()) :: {:continue, atom(), map()} | {:done, map()} | {:error, Exception.t()}
   def step(server), do: GenServer.call(server, :step, :infinity)
 
-  @doc "Return the current server state snapshot."
+  @doc """
+  Return the current server state snapshot.
+
+  The returned map contains:
+
+  - `shared` — current shared state
+  - `current_id` — the next node to execute (`nil` when done)
+  - `status` — `:ready` | `:running` | `:stepping` | `:done` | `{:error, exc}`
+  - `run_id` — execution identifier
+  - `flow_id` — the telemetry/Monitor flow ID (matches `shared[:phlox_flow_id]`)
+  """
   @spec state(GenServer.server()) :: map()
   def state(server), do: GenServer.call(server, :state)
 
@@ -159,6 +186,10 @@ defmodule Phlox.FlowServer do
         nil -> metadata
         cp_config -> Map.put_new(metadata, :checkpoint, cp_config)
       end
+
+    # Guarantee :phlox_flow_id is always in shared so telemetry/Monitor
+    # never falls back to make_ref(). User-supplied value wins.
+    shared = Map.put_new(shared, :phlox_flow_id, run_id)
 
     state = %{
       flow: flow,
@@ -279,7 +310,8 @@ defmodule Phlox.FlowServer do
       shared: state.shared,
       current_id: state.current_id,
       status: state.status,
-      run_id: state.run_id
+      run_id: state.run_id,
+      flow_id: state.shared[:phlox_flow_id]
     }
 
     {:reply, snapshot, state}
@@ -290,13 +322,15 @@ defmodule Phlox.FlowServer do
   @impl GenServer
   def handle_call({:reset, new_shared}, _from, state) do
     shared = new_shared || state.initial_shared
+    new_run_id = generate_run_id()
+    shared = Map.put_new(shared, :phlox_flow_id, new_run_id)
 
     new_state = %{
       state
       | shared: shared,
         current_id: state.flow.start_id,
         status: :ready,
-        run_id: generate_run_id()
+        run_id: new_run_id
     }
 
     {:reply, :ok, new_state}
@@ -306,17 +340,14 @@ defmodule Phlox.FlowServer do
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  # Choose Runner (no middlewares) or Pipeline (with middlewares)
+  # Always use Pipeline — even with no middlewares it emits telemetry.
+  # Runner stays pure (no side effects) for direct library use.
   defp orchestrate(state) do
-    if state.middlewares == [] do
-      Runner.orchestrate(state.flow, state.current_id, state.shared)
-    else
-      Pipeline.orchestrate(state.flow, state.current_id, state.shared,
-        middlewares: state.middlewares,
-        run_id: state.run_id,
-        metadata: state.metadata
-      )
-    end
+    Pipeline.orchestrate(state.flow, state.current_id, state.shared,
+      middlewares: state.middlewares,
+      run_id: state.run_id,
+      metadata: state.metadata
+    )
   end
 
   # Middleware runners for step mode (same logic as Pipeline)

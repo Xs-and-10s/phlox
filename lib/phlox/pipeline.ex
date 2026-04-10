@@ -1,10 +1,11 @@
 defmodule Phlox.Pipeline do
   @moduledoc """
-  Orchestration loop with middleware support.
+  Orchestration loop with middleware and telemetry support.
 
   `Phlox.Pipeline` extends the pure `Phlox.Runner` loop with a
-  composable middleware stack. Each node execution is wrapped by the
-  configured middlewares in onion order:
+  composable middleware stack and `Phlox.Telemetry` event emission.
+  Each node execution is wrapped by the configured middlewares in
+  onion order:
 
       before_node (mw1 → mw2 → mw3)
         ↓
@@ -12,8 +13,24 @@ defmodule Phlox.Pipeline do
         ↓
       after_node  (mw3 → mw2 → mw1)
 
-  If no middlewares are configured, behaviour is identical to
-  `Phlox.Runner.orchestrate/3`.
+  If no middlewares are configured, node execution is identical to
+  `Phlox.Runner.orchestrate/3`, but telemetry events still fire,
+  enabling `Phlox.Monitor` to track progress.
+
+  ## Telemetry
+
+  Pipeline emits the full set of `Phlox.Telemetry` events:
+  `[:phlox, :flow, :start]`, `[:phlox, :flow, :stop]`,
+  `[:phlox, :node, :start]`, `[:phlox, :node, :stop]`, and
+  `[:phlox, :node, :exception]`. See `Phlox.Telemetry` for the
+  full event schema.
+
+  ## Flow ID
+
+  If `shared` does not contain a `:phlox_flow_id` key, Pipeline
+  injects one using the `run_id`. This guarantees that
+  `Phlox.Monitor.subscribe/1` always has a stable, discoverable ID
+  to correlate events with.
 
   ## Usage
 
@@ -41,7 +58,7 @@ defmodule Phlox.Pipeline do
   - `metadata:` — arbitrary map threaded through middleware context
   """
 
-  alias Phlox.{Flow, HaltedError, Retry}
+  alias Phlox.{Flow, HaltedError, Retry, Telemetry}
 
   @doc """
   Orchestrate a flow with middleware support.
@@ -55,15 +72,33 @@ defmodule Phlox.Pipeline do
     run_id = Keyword.get(opts, :run_id) || generate_run_id()
     metadata = Keyword.get(opts, :metadata, %{})
 
+    # Guarantee :phlox_flow_id so telemetry/Monitor never uses make_ref()
+    shared = Map.put_new(shared, :phlox_flow_id, run_id)
+    flow_id = Telemetry.flow_id(shared)
+
+    Telemetry.flow_start(flow_id, flow)
+    start_time = System.monotonic_time()
+
     node = fetch_node!(flow, start_id)
-    step(flow, node, shared, middlewares, run_id, metadata)
+
+    try do
+      result = step(flow, node, shared, middlewares, run_id, metadata, flow_id)
+      duration = System.monotonic_time() - start_time
+      Telemetry.flow_stop(flow_id, :ok, duration)
+      result
+    rescue
+      e ->
+        duration = System.monotonic_time() - start_time
+        Telemetry.flow_stop(flow_id, :error, duration)
+        reraise e, __STACKTRACE__
+    end
   end
 
   # ---------------------------------------------------------------------------
   # The loop
   # ---------------------------------------------------------------------------
 
-  defp step(flow, node, shared, middlewares, run_id, metadata) do
+  defp step(flow, node, shared, middlewares, run_id, metadata, flow_id) do
     ctx = %{
       node_id: node.id,
       node: node,
@@ -72,26 +107,42 @@ defmodule Phlox.Pipeline do
       metadata: metadata
     }
 
+    # --- telemetry: node start ---
+    Telemetry.node_start(flow_id, node)
+    node_start_time = System.monotonic_time()
+
     # --- before hooks (list order) ---
     shared = run_before(middlewares, shared, ctx)
 
     # --- node execution (with interceptor support) ---
-    params = node.params
-    prep_res = node.module.prep(shared, params)
+    {action, new_shared} =
+      try do
+        params = node.params
+        prep_res = node.module.prep(shared, params)
 
-    interceptors = Phlox.Interceptor.read_interceptors(node.module)
-    exec_fn = Phlox.Interceptor.wrap(node.module, node.id, params, interceptors)
-    exec_res = Retry.run(node, prep_res, exec_fn)
+        interceptors = Phlox.Interceptor.read_interceptors(node.module)
+        exec_fn = Phlox.Interceptor.wrap(node.module, node.id, params, interceptors)
+        exec_res = Retry.run(node, prep_res, exec_fn)
 
-    {action, new_shared} = node.module.post(shared, prep_res, exec_res, params)
+        node.module.post(shared, prep_res, exec_res, params)
+      rescue
+        e ->
+          duration = System.monotonic_time() - node_start_time
+          Telemetry.node_exception(flow_id, node, :error, e, duration)
+          reraise e, __STACKTRACE__
+      end
 
     # --- after hooks (reverse order) ---
     {new_shared, action} = run_after(Enum.reverse(middlewares), new_shared, action, ctx)
 
+    # --- telemetry: node stop ---
+    node_duration = System.monotonic_time() - node_start_time
+    Telemetry.node_stop(flow_id, node, action, node_duration)
+
     # --- resolve next node ---
     case resolve_next(flow, node, action) do
       nil -> new_shared
-      next_node -> step(flow, next_node, new_shared, middlewares, run_id, metadata)
+      next_node -> step(flow, next_node, new_shared, middlewares, run_id, metadata, flow_id)
     end
   end
 

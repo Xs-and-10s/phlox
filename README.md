@@ -754,9 +754,9 @@ Phlox.FanOutNode               sub_flow per item
 Phlox.BatchFlow                full-flow fan-out
 Phlox.DSL                      declarative flow definition
 Phlox.Graph                    builder: new/add_node/connect/start_at/to_flow[!]
-Phlox.Flow                     %Flow{} struct + run/2
-Phlox.Runner                   orchestrate/3 (pure, no middleware, no interceptors)
-Phlox.Pipeline                 orchestrate/4 (middleware + interceptor support)
+Phlox.Flow                     %Flow{} struct + run/2 (delegates to Pipeline)
+Phlox.Runner                   orchestrate/3 (pure, no middleware, no telemetry)
+Phlox.Pipeline                 orchestrate/4 (middleware + interceptor + telemetry)
 Phlox.Retry                    run/3 (exec with retry + optional interceptor wrapping)
 Phlox.Middleware               behaviour: before_node/2, after_node/3
 Phlox.Middleware.Validate      enforces Phlox.Typed specs at node boundaries
@@ -787,9 +787,9 @@ Phlox.LLM.Ollama               Local model adapter
 2. **`post/4` must return `{action, new_shared}`** — always a tuple.
 3. **Middleware wraps the node lifecycle** — sees `shared` and `action`.
 4. **Interceptors wrap `exec/2`** — sees `prep_res` and `exec_res`, not `shared`.
-5. **Runner stays pure** — Pipeline adds middleware/interceptors on top.
+5. **Runner stays pure** — Pipeline adds middleware, interceptors, and telemetry on top. `Flow.run/2` and `FlowServer` use Pipeline; call `Runner.orchestrate/3` directly when you need zero side effects (e.g. property-based tests).
 6. **Checkpoint events are append-only** — immutable once written.
-7. **`shared` key `:phlox_flow_id`** is reserved for telemetry.
+7. **`shared` key `:phlox_flow_id`** is reserved for telemetry. Auto-injected from `run_id` if not provided by the caller.
 
 ---
 
