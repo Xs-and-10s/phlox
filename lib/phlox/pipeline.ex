@@ -75,10 +75,14 @@ defmodule Phlox.Pipeline do
     # --- before hooks (list order) ---
     shared = run_before(middlewares, shared, ctx)
 
-    # --- node execution (identical to Runner.step) ---
+    # --- node execution (with interceptor support) ---
     params = node.params
     prep_res = node.module.prep(shared, params)
-    exec_res = Retry.run(node, prep_res)
+
+    interceptors = Phlox.Interceptor.read_interceptors(node.module)
+    exec_fn = Phlox.Interceptor.wrap(node.module, node.id, params, interceptors)
+    exec_res = Retry.run(node, prep_res, exec_fn)
+
     {action, new_shared} = node.module.post(shared, prep_res, exec_res, params)
 
     # --- after hooks (reverse order) ---

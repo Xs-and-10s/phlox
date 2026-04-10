@@ -1,49 +1,43 @@
-# @behaviour + __using__ with all four callbacks
-
 defmodule Phlox.Node do
   @moduledoc """
-  The core behaviour for all Phlox nodes.
+  Behaviour for Phlox graph nodes.
 
-  ## Lifecycle
-
-  Every node runs three phases in sequence:
-
-      prep(shared, params)
-        -> exec(prep_res, params)
-          -> post(shared, prep_res, exec_res, params)
-            -> {action, new_shared}
-
-  - `prep/2`   — reads from `shared`; returns data needed by `exec`. Pure — no side effects.
-  - `exec/2`   — does the actual work (HTTP calls, LLM requests, DB writes). Receives only
-                  `prep_res` and `params` — no access to `shared`. This is intentional:
-                  exec should be a pure transformation or I/O call, not a state manager.
-  - `post/4`   — decides what happens next. Returns `{action_string, updated_shared}`.
-                  The action string is used to look up the next node in the graph.
-                  Use `:default` or `"default"` for the normal forward path.
-  - `exec_fallback/3` — called when all `max_retries` are exhausted. Default re-raises.
+  Every node in a Phlox flow is a module that implements this behaviour.
+  The three-phase lifecycle — `prep → exec → post` — keeps data reading
+  (prep), computation (exec), and state writing (post) cleanly separated.
+  The defaults are safe no-ops.
 
   ## Usage
 
       defmodule MyApp.FetchNode do
         use Phlox.Node
 
-        @impl Phlox.Node
+        def prep(shared, _params), do: Map.fetch!(shared, :url)
+
         def exec(url, _params) do
-          # do HTTP stuff
-          {:ok, body}
+          HTTPoison.get!(url).body
         end
 
-        @impl Phlox.Node
-        def post(shared, _prep_res, {:ok, body}, _params) do
+        def post(shared, _prep, body, _params) do
           {:default, Map.put(shared, :body, body)}
-        end
-
-        def post(shared, _prep_res, {:error, reason}, _params) do
-          {"error", Map.put(shared, :error, reason)}
         end
       end
 
-  Only override what you need. The defaults are safe no-ops.
+  ## Interceptors (V2.9)
+
+  Nodes can declare interceptors that wrap `exec/2` at the
+  computation boundary:
+
+      defmodule MyApp.EmbedNode do
+        use Phlox.Node
+
+        intercept MyApp.Interceptor.Cache, ttl: :timer.minutes(5)
+        intercept MyApp.Interceptor.RateLimit, max: 10, per: :second
+
+        def exec(text, _params), do: MyLLM.embed(text)
+      end
+
+  See `Phlox.Interceptor` for the interceptor behaviour and semantics.
   """
 
   @doc """
@@ -81,6 +75,11 @@ defmodule Phlox.Node do
   defmacro __using__(_opts) do
     quote do
       @behaviour Phlox.Node
+
+      # Interceptor support (V2.9)
+      import Phlox.Interceptor, only: [intercept: 1, intercept: 2]
+      Module.register_attribute(__MODULE__, :phlox_interceptors, accumulate: true)
+      @before_compile Phlox.Interceptor
 
       @impl Phlox.Node
       def prep(_shared, _params), do: nil

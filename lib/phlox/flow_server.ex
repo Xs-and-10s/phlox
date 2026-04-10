@@ -236,9 +236,13 @@ defmodule Phlox.FlowServer do
         # Before hooks
         shared = run_before(state.middlewares, state.shared, ctx)
 
-        # Node execution
+        # Node execution (with interceptor support)
         prep_res = node.module.prep(shared, params)
-        exec_res = Phlox.Retry.run(node, prep_res)
+
+        interceptors = Phlox.Interceptor.read_interceptors(node.module)
+        exec_fn = Phlox.Interceptor.wrap(node.module, node.id, params, interceptors)
+        exec_res = Phlox.Retry.run(node, prep_res, exec_fn)
+
         {action, new_shared} = node.module.post(shared, prep_res, exec_res, params)
 
         # After hooks (reverse order)
