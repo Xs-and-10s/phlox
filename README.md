@@ -613,10 +613,14 @@ The provider is injected via node `params` — swapping is one line.
 
 | Adapter | Provider | Free tier | Requires |
 |---|---|---|---|
+| `Phlox.LLM.OpenAI` | GPT-4o / GPT-4.1 | $5 free credits | `OPENAI_API_KEY` |
 | `Phlox.LLM.Google` | Gemini via AI Studio | 1,500 req/day | `GOOGLE_AI_KEY` |
 | `Phlox.LLM.Groq` | Llama/Mistral on Groq | 14,400 req/day | `GROQ_API_KEY` |
 | `Phlox.LLM.Anthropic` | Claude API | $5 free credits | `ANTHROPIC_API_KEY` |
 | `Phlox.LLM.Ollama` | Local models | Unlimited | Ollama installed |
+
+`Phlox.LLM.OpenAI` also accepts a `:base_url` option, so it doubles as an
+adapter for Azure OpenAI, OpenRouter, or any OpenAI-compatible endpoint.
 
 ### Using in a node
 
@@ -670,6 +674,66 @@ IO.puts(result.final_review)
 
 Three specialist agents (security, logic, style) analyze code from different
 angles, then a synthesizer combines, deduplicates, and ranks findings.
+
+---
+
+## Token Compression: Simplect & Complect
+
+Inspired by [caveman](https://github.com/JuliusBrussee/caveman) by Julius
+Brussee. Named after Rich Hickey's "complect" — if braiding things together
+is *complecting*, then stripping to the essence is *simplecting*.
+
+`Phlox.Middleware.Simplect` injects a token-compression system prompt
+pipeline-wide. `Phlox.Interceptor.Complect` overrides the level per node.
+
+### Pipeline-wide compression
+
+```elixir
+Phlox.Pipeline.orchestrate(flow, flow.start_id, shared,
+  middlewares: [Phlox.Middleware.Simplect, Phlox.Middleware.Checkpoint],
+  metadata: %{simplect: :full}
+)
+```
+
+### Per-node overrides
+
+```elixir
+defmodule MyApp.Nodes.Classifier do
+  use Phlox.Node
+  intercept Phlox.Interceptor.Complect, level: :ultra  # maximum compression
+
+  def prep(shared, _p), do: [%{role: "system", content: shared.system_prompt},
+                              %{role: "user", content: shared.text}]
+  def exec(msgs, p), do: Phlox.LLM.Groq.chat(msgs, p)
+  def post(shared, _, {:ok, label}, _), do: {:default, Map.put(shared, :label, label)}
+end
+
+defmodule MyApp.Nodes.UserReport do
+  use Phlox.Node
+  intercept Phlox.Interceptor.Complect, level: :off  # full prose for humans
+
+  def prep(shared, _p), do: [%{role: "system", content: shared.system_prompt},
+                              %{role: "user", content: "Summarize: #{shared.analysis}"}]
+  def exec(msgs, p), do: Phlox.LLM.Anthropic.chat(msgs, p)
+  def post(shared, _, {:ok, text}, _), do: {:default, Map.put(shared, :report, text)}
+end
+```
+
+### Direct usage (no pipeline)
+
+```elixir
+[%{role: "user", content: "Explain GenServer"}]
+|> Phlox.Simplect.wrap(:ultra)
+|> Phlox.LLM.Groq.chat(model: "llama-3.3-70b-versatile")
+```
+
+### Intensity levels
+
+| Level   | Style                                      | Token savings |
+|---------|--------------------------------------------|---------------|
+| `:lite` | Drop filler, keep grammar                  | ~40%          |
+| `:full` | Drop articles, fragments OK, short synonyms| ~65%          |
+| `:ultra`| Abbreviate, arrows, maximum compression    | ~75%          |
 
 ---
 
@@ -761,7 +825,9 @@ Phlox.Retry                    run/3 (exec with retry + optional interceptor wra
 Phlox.Middleware               behaviour: before_node/2, after_node/3
 Phlox.Middleware.Validate      enforces Phlox.Typed specs at node boundaries
 Phlox.Middleware.Checkpoint    persists shared after each node
+Phlox.Middleware.Simplect      token-compression system prompt injection
 Phlox.Interceptor              behaviour: before_exec/2, after_exec/2 + intercept macro
+Phlox.Interceptor.Complect     per-node simplect level override
 Phlox.Typed                    use macro: input/1, output/1 spec declarations
 Phlox.Checkpoint               behaviour: save/load_latest/load_at/history/delete
 Phlox.Checkpoint.Memory        in-memory adapter (Agent-backed)
@@ -779,6 +845,8 @@ Phlox.LLM.Anthropic            Claude API adapter
 Phlox.LLM.Google               Gemini AI Studio adapter
 Phlox.LLM.Groq                 Groq inference adapter
 Phlox.LLM.Ollama               Local model adapter
+Phlox.LLM.OpenAI               OpenAI / Azure / OpenRouter adapter
+Phlox.Simplect                 token-compression prompt engine (lite/full/ultra)
 ```
 
 ### Key invariants
@@ -805,6 +873,10 @@ nodes, composable middleware, persistent checkpoints with rewind, typed shared
 state via [Gladius](https://hex.pm/packages/gladius), node-declared interceptors,
 `FlowServer`, `FlowSupervisor`, `Monitor`, real-time adapters, LLM provider
 abstraction, and telemetry — is Phlox's own contribution.
+
+The Simplect/Complect token compression system is inspired by
+[caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee, and
+named after Rich Hickey's concept of "complected."
 
 ---
 

@@ -23,7 +23,9 @@ defmodule Phlox do
     framework does to every node; interceptors are what nodes declare they want
     done to themselves.
   - **Swappable LLM providers** — adapters for Anthropic, Google AI Studio,
-    Groq, and Ollama. Swap providers with one line; the flow graph doesn't change.
+    Groq, Ollama, and OpenAI. Swap providers with one line; the flow graph doesn't change.
+  - **Token compression** — `Phlox.Middleware.Simplect` cuts 40–75% of LLM output
+    tokens pipeline-wide. `Phlox.Interceptor.Complect` overrides per node.
   - **OTP supervision** — every flow runs under a GenServer with step-through
     debugging, state inspection, and named supervision via DynamicSupervisor.
   - **Real-time monitoring** — ETS-backed flow tracking with subscriber
@@ -100,6 +102,8 @@ defmodule Phlox do
   | `Phlox.Resume` | Resume and rewind from checkpoints |
   | `Phlox.FlowServer` | GenServer wrapper with step-through debugging |
   | `Phlox.LLM` | Behaviour for swappable LLM providers |
+  | `Phlox.LLM.OpenAI` | OpenAI / Azure / OpenRouter adapter |
+  | `Phlox.Simplect` | Token-compression prompt engine (lite/full/ultra) |
   """
 
   alias Phlox.{Graph, Flow}

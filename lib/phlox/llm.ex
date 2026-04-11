@@ -59,6 +59,12 @@ defmodule Phlox.LLM do
         llm_opts: [model: "claude-sonnet-4-20250514"]
       })
 
+      # OpenAI-compatible (also works with Azure, OpenRouter)
+      Graph.add_node(:think, ThinkNode, %{
+        llm: Phlox.LLM.OpenAI,
+        llm_opts: [model: "gpt-4o"]
+      })
+
   ## Message format
 
   Messages follow the OpenAI/Anthropic convention:

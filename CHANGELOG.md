@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] — 2026-04-10
+
+### Added
+
+- **`Phlox.LLM.OpenAI`** — OpenAI Chat Completions adapter. Includes `:base_url`
+  option for Azure OpenAI, OpenRouter, or any OpenAI-compatible endpoint.
+- **`Phlox.Simplect`** — Token-efficient LLM communication engine. Three intensity
+  levels (`:lite`, `:full`, `:ultra`) that cut 40–75% of output tokens while
+  keeping full technical accuracy. Inspired by
+  [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee.
+- **`Phlox.Middleware.Simplect`** — Pipeline-wide middleware that injects simplect
+  system prompts into `shared` before each node. Configurable via
+  `metadata[:simplect]` or `shared[:simplect]`.
+- **`Phlox.Interceptor.Complect`** — Per-node interceptor that overrides simplect
+  intensity at the `exec/2` boundary. Declared on nodes via
+  `intercept Phlox.Interceptor.Complect, level: :ultra` (or `:off` to disable).
+  Uses marker-based detection to surgically swap/strip simplect prompts without
+  touching user-authored system content.
+
 ## [0.3.1] — 2026-04-10
 
 ### Fixed
