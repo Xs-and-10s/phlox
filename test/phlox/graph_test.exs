@@ -27,7 +27,7 @@ defmodule Phlox.GraphTest do
     b = Graph.new() |> Graph.add_node(:a, StubA, %{foo: 1})
 
     assert %{id: :a, module: StubA, params: %{foo: 1},
-             successors: %{}, max_retries: 1, wait_ms: 0} = b.nodes[:a]
+             successors: %{}, max_retries: 0, wait_ms: 0} = b.nodes[:a]
   end
 
   test "add_node/5 accepts max_retries and wait_ms opts" do

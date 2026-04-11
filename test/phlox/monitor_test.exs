@@ -33,7 +33,8 @@ defmodule Phlox.MonitorTest do
   defp node_stop(flow_id, node_id, action \\ :default, module \\ Phlox.Node) do
     emit([:phlox, :node, :stop],
       %{duration: System.convert_time_unit(50, :millisecond, :native)},
-      %{flow_id: flow_id, node_id: node_id, module: module, action: action})
+      %{flow_id: flow_id, node_id: node_id, module: module, action: action,
+        shared: %{phlox_flow_id: flow_id}})
   end
 
   defp node_exception(flow_id, node_id, reason \\ "boom") do

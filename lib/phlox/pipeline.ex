@@ -56,6 +56,10 @@ defmodule Phlox.Pipeline do
   - `middlewares:` — list of modules implementing `Phlox.Middleware`
   - `run_id:` — string identifier for this execution (auto-generated if omitted)
   - `metadata:` — arbitrary map threaded through middleware context
+  - `on_node_done:` — optional `(node_id, shared) -> any()` callback invoked
+    after each node completes (post-middleware, post-telemetry). Used by
+    `FlowServer` to cast intermediate `shared` state back for real-time
+    observability. Ignored if `nil`.
   """
 
   alias Phlox.{Flow, HaltedError, Retry, Telemetry}
@@ -79,10 +83,11 @@ defmodule Phlox.Pipeline do
     Telemetry.flow_start(flow_id, flow)
     start_time = System.monotonic_time()
 
+    on_node_done = Keyword.get(opts, :on_node_done)
     node = fetch_node!(flow, start_id)
 
     try do
-      result = step(flow, node, shared, middlewares, run_id, metadata, flow_id)
+      result = step(flow, node, shared, middlewares, run_id, metadata, flow_id, on_node_done)
       duration = System.monotonic_time() - start_time
       Telemetry.flow_stop(flow_id, :ok, duration)
       result
@@ -98,7 +103,7 @@ defmodule Phlox.Pipeline do
   # The loop
   # ---------------------------------------------------------------------------
 
-  defp step(flow, node, shared, middlewares, run_id, metadata, flow_id) do
+  defp step(flow, node, shared, middlewares, run_id, metadata, flow_id, on_node_done) do
     ctx = %{
       node_id: node.id,
       node: node,
@@ -137,12 +142,15 @@ defmodule Phlox.Pipeline do
 
     # --- telemetry: node stop ---
     node_duration = System.monotonic_time() - node_start_time
-    Telemetry.node_stop(flow_id, node, action, node_duration)
+    Telemetry.node_stop(flow_id, node, action, new_shared, node_duration)
+
+    # --- notify caller of intermediate state ---
+    if on_node_done, do: on_node_done.(node.id, new_shared)
 
     # --- resolve next node ---
     case resolve_next(flow, node, action) do
       nil -> new_shared
-      next_node -> step(flow, next_node, new_shared, middlewares, run_id, metadata, flow_id)
+      next_node -> step(flow, next_node, new_shared, middlewares, run_id, metadata, flow_id, on_node_done)
     end
   end
 

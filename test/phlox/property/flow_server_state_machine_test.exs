@@ -1,4 +1,4 @@
-defmodule Phlox.FlowServerTest do
+defmodule Phlox.Property.FlowServerStateMachineTest do
   use ExUnit.Case, async: true
 
   alias Phlox.{Graph, FlowServer}

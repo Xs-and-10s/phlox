@@ -7,12 +7,22 @@ defmodule Phlox.FlowServer do
 
   - **Supervised execution** — run flows under a `Supervisor` or
     `DynamicSupervisor` for fault tolerance and restart strategies.
+  - **Non-blocking run** — `run/1` blocks the *caller* until the flow
+    completes, but executes the pipeline in a separate process so the
+    GenServer remains responsive to `state/1` queries throughout. This
+    enables real-time monitoring via `Phlox.Monitor`, LiveView, and SSE.
+  - **Intermediate state** — during a run, `state/1` returns the `shared`
+    map as of the last completed node, not just the initial or final value.
+    Each node completion casts updated `shared` back to the GenServer.
+  - **Crash detection** — the orchestration process is monitored via
+    `Process.monitor/1`. If it is killed (OOM, `:kill` signal, linked
+    crash), FlowServer replies to the caller with an error, emits
+    `[:phlox, :flow, :stop]` telemetry, and transitions to `{:error, _}`
+    rather than hanging silently.
   - **Inspectable state** — query the current `shared` map at any point
     during a run (useful for LiveView dashboards or monitoring).
   - **Step-by-step execution** — advance one node at a time, letting callers
     observe intermediate state between steps.
-  - **Full run** — run all nodes to completion in one `call`, blocking until
-    done or an error occurs.
   - **Middleware support** — pass `:middlewares` to enable checkpointing,
     cost tracking, and other composable hooks.
   - **Telemetry** — all executions emit `Phlox.Telemetry` events, enabling
@@ -85,7 +95,7 @@ defmodule Phlox.FlowServer do
   ## Status values
 
   - `:ready`    — not yet started
-  - `:running`  — a `run/1` call is in progress (blocks the server)
+  - `:running`  — a `run/1` call is in progress (server remains responsive to `state/1`)
   - `:stepping` — being advanced node-by-node via `step/1`
   - `:done`     — completed successfully; `shared` holds the final state
   - `{:error, exception}` — a node raised and all retries/fallbacks failed
@@ -93,7 +103,7 @@ defmodule Phlox.FlowServer do
 
   use GenServer
 
-  alias Phlox.Pipeline
+  alias Phlox.{Pipeline, Telemetry}
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -120,7 +130,16 @@ defmodule Phlox.FlowServer do
     GenServer.start_link(__MODULE__, init_opts, gen_opts)
   end
 
-  @doc "Run the flow to completion. Blocks until all nodes have executed."
+  @doc """
+  Run the flow to completion.
+
+  Blocks the *caller* until all nodes have executed, but the GenServer
+  itself remains responsive — `state/1` can be called from other processes
+  during execution to observe intermediate `shared` state.
+
+  Returns `{:ok, final_shared}` on success, `{:error, exception}` on
+  failure (including if the orchestration process is killed).
+  """
   @spec run(GenServer.server()) :: {:ok, map()} | {:error, Exception.t()}
   def run(server), do: GenServer.call(server, :run, :infinity)
 
@@ -140,9 +159,14 @@ defmodule Phlox.FlowServer do
   @doc """
   Return the current server state snapshot.
 
+  Safe to call at any time, including while a `run/1` is in progress.
+  During execution, `shared` reflects the state as of the last completed
+  node (not just the initial value), and `current_id` tracks which node
+  the pipeline is currently working on.
+
   The returned map contains:
 
-  - `shared` — current shared state
+  - `shared` — current shared state (updated after each node during a run)
   - `current_id` — the next node to execute (`nil` when done)
   - `status` — `:ready` | `:running` | `:stepping` | `:done` | `{:error, exc}`
   - `run_id` — execution identifier
@@ -197,6 +221,8 @@ defmodule Phlox.FlowServer do
       shared: shared,
       current_id: current_id,
       status: :ready,
+      caller: nil,
+      run_ref: nil,
       middlewares: middlewares,
       run_id: run_id,
       metadata: metadata
@@ -213,26 +239,29 @@ defmodule Phlox.FlowServer do
     {:reply, {:error, {:invalid_status, status}}, state}
   end
 
-  def handle_call(:run, _from, state) do
-    new_state = %{state | status: :running}
+  def handle_call(:run, from, state) do
+    server = self()
 
-    result =
-      try do
-        final_shared = orchestrate(state)
-        {:ok, final_shared}
-      rescue
-        e -> {:error, e}
-      end
+    # Spawn orchestration off the GenServer process.
+    # The callback casts intermediate shared state back so state/1 stays fresh.
+    # On completion (or crash), casts the final result back so we can reply.
+    pid = spawn(fn ->
+      result =
+        try do
+          final_shared = orchestrate(state, server)
+          {:ok, final_shared}
+        rescue
+          e -> {:error, e}
+        end
 
-    case result do
-      {:ok, final_shared} ->
-        done_state = %{new_state | shared: final_shared, status: :done, current_id: nil}
-        {:reply, {:ok, final_shared}, done_state}
+      GenServer.cast(server, {:flow_complete, result})
+    end)
 
-      {:error, exc} ->
-        error_state = %{new_state | status: {:error, exc}}
-        {:reply, {:error, exc}, error_state}
-    end
+    # Monitor the spawned process so we detect kills, OOMs, and other
+    # exits that bypass the try/rescue (e.g. :kill signal, linked crash).
+    ref = Process.monitor(pid)
+
+    {:noreply, %{state | status: :running, caller: from, run_ref: ref}}
   end
 
   # --- step ---
@@ -330,10 +359,58 @@ defmodule Phlox.FlowServer do
       | shared: shared,
         current_id: state.flow.start_id,
         status: :ready,
+        caller: nil,
+        run_ref: nil,
         run_id: new_run_id
     }
 
     {:reply, :ok, new_state}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Async run — casts from the spawned orchestration process
+  # ---------------------------------------------------------------------------
+
+  @impl GenServer
+  def handle_cast({:node_done, node_id, shared}, state) do
+    {:noreply, %{state | shared: shared, current_id: node_id}}
+  end
+
+  def handle_cast({:flow_complete, {:ok, final_shared}}, state) do
+    if state.run_ref, do: Process.demonitor(state.run_ref, [:flush])
+    GenServer.reply(state.caller, {:ok, final_shared})
+    {:noreply, %{state | shared: final_shared, status: :done, current_id: nil, caller: nil, run_ref: nil}}
+  end
+
+  def handle_cast({:flow_complete, {:error, exc}}, state) do
+    if state.run_ref, do: Process.demonitor(state.run_ref, [:flush])
+    GenServer.reply(state.caller, {:error, exc})
+    {:noreply, %{state | status: {:error, exc}, caller: nil, run_ref: nil}}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Spawned orchestration process crashed (OOM, :kill, linked exit, etc.)
+  # This fires only when the try/rescue inside spawn was bypassed entirely.
+  # ---------------------------------------------------------------------------
+
+  @impl GenServer
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{run_ref: ref} = state)
+      when reason != :normal do
+    # Emit flow_stop telemetry so Monitor + subscribers see the failure
+    flow_id = Telemetry.flow_id(state.shared)
+    Telemetry.flow_stop(flow_id, :error, 0)
+
+    exc = %RuntimeError{
+      message: "Phlox.FlowServer: orchestration process crashed: #{inspect(reason)}"
+    }
+
+    GenServer.reply(state.caller, {:error, exc})
+    {:noreply, %{state | status: {:error, exc}, caller: nil, run_ref: nil}}
+  end
+
+  # Normal DOWN (process exited after casting flow_complete) — already handled
+  def handle_info({:DOWN, _ref, :process, _pid, :normal}, state) do
+    {:noreply, state}
   end
 
   # ---------------------------------------------------------------------------
@@ -342,11 +419,19 @@ defmodule Phlox.FlowServer do
 
   # Always use Pipeline — even with no middlewares it emits telemetry.
   # Runner stays pure (no side effects) for direct library use.
-  defp orchestrate(state) do
+  # When called from the async run path, `server` is the FlowServer pid
+  # so we can cast intermediate state back for real-time observability.
+  defp orchestrate(state, server) do
+    on_node_done =
+      if server do
+        fn node_id, shared -> GenServer.cast(server, {:node_done, node_id, shared}) end
+      end
+
     Pipeline.orchestrate(state.flow, state.current_id, state.shared,
       middlewares: state.middlewares,
       run_id: state.run_id,
-      metadata: state.metadata
+      metadata: state.metadata,
+      on_node_done: on_node_done
     )
   end
 

@@ -52,6 +52,7 @@ defmodule Phlox.Monitor do
         status:      :running,       # :ready | :running | :done | {:error, exc}
         start_id:    :fetch,
         current_id:  :embed,         # nil when done
+        shared:      %{...},         # latest shared state (updated after each node)
         started_at:  ~U[...],
         updated_at:  ~U[...],
         nodes: %{
@@ -259,6 +260,7 @@ defmodule Phlox.Monitor do
       status:     :running,
       start_id:   metadata.start_id,
       current_id: metadata.start_id,
+      shared:     nil,
       started_at: now,
       updated_at: now,
       nodes:      %{}
@@ -299,7 +301,11 @@ defmodule Phlox.Monitor do
         duration_ms: duration
       }
 
-      %{snap | updated_at: now, nodes: Map.put(snap.nodes, node_id, node_entry)}
+      %{snap |
+        updated_at: now,
+        nodes: Map.put(snap.nodes, node_id, node_entry),
+        shared: metadata[:shared]
+      }
     end)
     |> broadcast_if_ok(flow_id, :node_done, state.subscribers)
   end

@@ -46,21 +46,34 @@ defmodule Phlox.Graph do
   - `module`  — a module that implements `Phlox.Node` or `Phlox.BatchNode`
   - `params`  — node-specific configuration, immutable per run
   - `opts`    — keyword options:
-      - `max_retries:` (default 1 — one attempt, no retry)
+      - `max_retries:` (default 0 — one attempt, no retries).
+        Number of retries *after* the first attempt.
+        Use `:infinity` for unlimited retries (pair with `:wait_ms`).
       - `wait_ms:` (default 0)
   """
   @spec add_node(Builder.t(), atom(), module(), map(), keyword()) :: Builder.t()
   def add_node(%Builder{} = b, id, module, params \\ %{}, opts \\ []) do
+    max_retries = Keyword.get(opts, :max_retries, 0)
+    validate_max_retries!(max_retries)
+
     entry = %{
       id: id,
       module: module,
       params: params,
       successors: %{},
-      max_retries: Keyword.get(opts, :max_retries, 1),
+      max_retries: max_retries,
       wait_ms: Keyword.get(opts, :wait_ms, 0)
     }
 
     %Builder{b | nodes: Map.put(b.nodes, id, entry)}
+  end
+
+  defp validate_max_retries!(:infinity), do: :ok
+  defp validate_max_retries!(n) when is_integer(n) and n >= 0, do: :ok
+
+  defp validate_max_retries!(n) do
+    raise ArgumentError,
+          "Phlox.Graph.add_node: max_retries must be a non-negative integer or :infinity, got: #{inspect(n)}"
   end
 
   @doc """

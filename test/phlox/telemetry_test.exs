@@ -62,8 +62,8 @@ defmodule Phlox.TelemetryTest do
     assert Telemetry.node_start(make_ref(), stub_node()) == :ok
   end
 
-  test "node_stop/4 does not raise" do
-    assert Telemetry.node_stop(make_ref(), stub_node(), :default, 1000) == :ok
+  test "node_stop/5 does not raise" do
+    assert Telemetry.node_stop(make_ref(), stub_node(), :default, %{}, 1000) == :ok
   end
 
   test "node_exception/5 does not raise" do
@@ -106,13 +106,13 @@ defmodule Phlox.TelemetryTest do
   test "emit functions accept nil flow_id without raising" do
     # flow_id can be nil when called from FlowServer before run starts
     assert Telemetry.node_start(nil, stub_node()) == :ok
-    assert Telemetry.node_stop(nil, stub_node(), "default", 0) == :ok
+    assert Telemetry.node_stop(nil, stub_node(), "default", %{}, 0) == :ok
     assert Telemetry.flow_stop(nil, :ok, 0) == :ok
   end
 
   test "node emit functions work with string and atom action values" do
     node = stub_node(:my_node)
-    assert Telemetry.node_stop(make_ref(), node, "error", 100) == :ok
-    assert Telemetry.node_stop(make_ref(), node, :default, 100) == :ok
+    assert Telemetry.node_stop(make_ref(), node, "error", %{}, 100) == :ok
+    assert Telemetry.node_stop(make_ref(), node, :default, %{}, 100) == :ok
   end
 end

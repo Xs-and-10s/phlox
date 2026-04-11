@@ -40,6 +40,7 @@ defmodule Phlox.MixProject do
     [
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
+      {:stream_data, "~> 1.0", only: [:dev, :test]},
 
       # Optional — enables telemetry events + Phlox.Monitor
       {:telemetry, "~> 1.0", optional: true},

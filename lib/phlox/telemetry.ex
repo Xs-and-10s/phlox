@@ -19,7 +19,7 @@ defmodule Phlox.Telemetry do
 
       measurements: %{duration: integer()}   # native time units
       metadata:     %{flow_id: term(), node_id: atom(), module: module(),
-                      action: String.t() | :default}
+                      action: String.t() | :default, shared: map()}
 
   ### `[:phlox, :node, :exception]`
   Emitted when a node raises after all retries and fallback are exhausted.
@@ -84,12 +84,13 @@ defmodule Phlox.Telemetry do
   end
 
   @doc false
-  def node_stop(flow_id, node, action, duration) do
+  def node_stop(flow_id, node, action, shared, duration) do
     emit([:phlox, :node, :stop], %{duration: duration}, %{
       flow_id: flow_id,
       node_id: node.id,
       module:  node.module,
-      action:  action
+      action:  action,
+      shared:  shared
     })
   end
 
