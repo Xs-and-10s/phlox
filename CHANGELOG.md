@@ -1,139 +1,116 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+All notable changes to Phlox are documented here.
 
-## [0.4.0] — 2026-04-10
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Phlox adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### Added
+---
 
-- **`Phlox.LLM.OpenAI`** — OpenAI Chat Completions adapter. Includes `:base_url`
-  option for Azure OpenAI, OpenRouter, or any OpenAI-compatible endpoint.
-- **`Phlox.Simplect`** — Token-efficient LLM communication engine. Three intensity
-  levels (`:lite`, `:full`, `:ultra`) that cut 40–75% of output tokens while
-  keeping full technical accuracy. Inspired by
-  [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee.
-- **`Phlox.Middleware.Simplect`** — Pipeline-wide middleware that injects simplect
-  system prompts into `shared` before each node. Configurable via
-  `metadata[:simplect]` or `shared[:simplect]`.
-- **`Phlox.Interceptor.Complect`** — Per-node interceptor that overrides simplect
-  intensity at the `exec/2` boundary. Declared on nodes via
-  `intercept Phlox.Interceptor.Complect, level: :ultra` (or `:off` to disable).
-  Uses marker-based detection to surgically swap/strip simplect prompts without
-  touching user-authored system content.
-
-## [0.3.1] — 2026-04-10
-
-### Fixed
-
-- **Pipeline now emits telemetry.** `Phlox.Pipeline.orchestrate/4` emits all five
-  `Phlox.Telemetry` events (flow start/stop, node start/stop/exception). Previously
-  neither Runner nor Pipeline called any telemetry functions, leaving `Phlox.Monitor`
-  completely blind.
-- **FlowServer always uses Pipeline.** `FlowServer.run/1` now dispatches to
-  `Pipeline.orchestrate/4` regardless of whether middlewares are configured, ensuring
-  telemetry fires for every execution. `Phlox.Runner` remains available for
-  side-effect-free use (e.g. property-based tests).
-- **Flow.run/2 uses Pipeline.** The convenience entry point now emits telemetry and
-  injects `:phlox_flow_id`, matching the behaviour of FlowServer and Pipeline.
-- **FlowSupervisor.start_flow/4 forwards opts.** `middlewares:`, `run_id:`, and
-  `metadata:` are now passed through to `FlowServer.start_link/1`. Previously these
-  options were silently dropped.
-- **`:phlox_flow_id` auto-injected.** Pipeline, FlowServer, and Flow.run now inject
-  `run_id` as `:phlox_flow_id` in `shared` when the caller omits it. This guarantees
-  `Monitor.subscribe/1` always has a stable, discoverable ID to correlate events with.
-  The `make_ref()` fallback in `Telemetry.flow_id/1` is now unreachable from all
-  standard execution paths.
-- **FlowServer.state/1** snapshot now includes `flow_id` for easy discovery.
-- **FlowServer.reset/2** re-injects `:phlox_flow_id` using the freshly generated `run_id`.
-
-## [0.3.0] — 2026-04-10
+## [0.5.0] — 2026-04-11
 
 ### Added
 
-**Middleware system (V2.7a)**
-- `Phlox.Middleware` behaviour with `before_node/2` and `after_node/3` callbacks
-- `Phlox.Pipeline` orchestrator — wraps Runner with composable middleware stack
-- Onion-model execution: before hooks fire in list order, after hooks fire in reverse
-- `{:halt, reason}` support — any middleware can abort the flow
-- `Phlox.HaltedError` exception with reason, node id, middleware module, and phase
-
-**Persistent checkpoints (V2.7b–d)**
-- `Phlox.Checkpoint` behaviour — append-only event log contract
-- `Phlox.Checkpoint.Memory` — Agent-backed in-memory adapter for dev/test
-- `Phlox.Checkpoint.Ecto` — Postgres adapter with unique `{run_id, sequence}` index
-- `Phlox.Middleware.Checkpoint` — saves shared state after each node completes
-- `mix phlox.gen.migration` — generates the `phlox_checkpoints` table migration
-
-**Resume and rewind (V2.7e)**
-- `Phlox.Resume.resume/2` — continue a flow from its latest checkpoint
-- `Phlox.Resume.rewind/3` — reload a checkpoint by node id and re-execute downstream
-- Resumed runs automatically include checkpoint middleware
-- `:resumed_from` metadata injected into pipeline context for traceability
-
-**FlowServer integration (V2.7g)**
-- `Phlox.FlowServer` accepts `:middlewares`, `:run_id`, and `:metadata` options
-- Step mode fires middleware hooks per step
-- `:resume` option loads checkpoint during init, starts from the checkpointed node
-- `state/1` snapshot includes `run_id`
-- `reset/2` generates a fresh run_id
-
-**Typed shared state (V2.8)**
-- `Phlox.Typed` — `use` macro providing `input/1` and `output/1` spec declarations
-- `Phlox.Middleware.Validate` — enforces specs at node boundaries
-- Gladius integration: full spec algebra (schemas, transforms, coercions, defaults)
-- Plain function fallback when Gladius is not a dependency
-- Shaped values replace shared — specs actively participate in data flow
-
-**Interceptors (V2.9)**
-- `Phlox.Interceptor` behaviour with `before_exec/2` and `after_exec/2` callbacks
-- `intercept` macro — declare interceptors directly on node modules
-- Interceptors run inside the retry loop, wrapping each exec attempt
-- `{:skip, value}` — short-circuit exec (cache hits, circuit breakers)
-- `{:halt, reason}` — abort from the exec boundary
-- Access boundary enforced: interceptors see prep_res/exec_res, not shared
-
-**LLM provider abstraction**
-- `Phlox.LLM` behaviour with `chat/2` callback
-- `Phlox.LLM.Anthropic` — Claude API adapter
-- `Phlox.LLM.Google` — Gemini AI Studio adapter (free tier: 1,500 req/day)
-- `Phlox.LLM.Groq` — Groq inference adapter (free tier: 14,400 req/day)
-- `Phlox.LLM.Ollama` — Local model adapter via Ollama
-- All adapters guarded by `Code.ensure_loaded?(Req)` — zero-dep when Req is absent
-
-**Examples**
-- `Phlox.Examples.CodeReview` — multi-agent code review pipeline (security, logic, style, synthesizer)
+- **Phlox spinner** — branded three-ring loading indicator shipped as
+  standalone CSS (`priv/static/phlox-spinner.css`). Two states: idle (logo
+  mark) and spinning (petals in motion). Collapse-and-bloom transition when
+  toggling from active to idle. Four CSS custom properties for full
+  theme control.
+- **`Phlox.Component`** — Phoenix function component (`spinner/1`) with
+  `:spinning`, `:size`, and `:class` attributes. Includes `role="status"`
+  and dynamic `aria-label` for accessibility.
+- **Favicon** — `priv/static/favicon.ico` (16/32/48px) and
+  `priv/static/phlox-mark.png` derived from the spinner's idle state.
+- **Datastar integration docs** — `data-class:spinning` binding examples
+  for non-Phoenix consumers.
+- Optional deps declared: `phoenix_live_view ~> 1.0` (for `Phlox.Component`)
+  and `ecto_sql ~> 3.10` (for `Phlox.Checkpoint.Ecto`).
 
 ### Changed
 
-- `Phlox.Retry.run/2` now accepts an optional third argument `exec_fn` for interceptor wrapping (backward compatible — `nil` default calls `mod.exec/2` directly)
-- `Phlox.Node.__using__` now imports `intercept` from `Phlox.Interceptor` and registers the `@phlox_interceptors` accumulating attribute
+- Hex package `files` list now includes `priv/static/` assets.
+- `groups_for_modules` in ex_doc config updated to include UI and Adapter
+  groups.
 
-### Fixed
+---
 
-- `function_exported?/3` does not trigger module loading — `Pipeline` and `FlowServer` now use `Code.ensure_loaded?/1` before checking exports
-
-## [0.2.0] — 2026-04-05
-
-### Added
-
-- `Phlox.FlowSupervisor` — DynamicSupervisor with configurable `max_restarts`/`max_seconds`
-- `Phlox.DSL` — declarative `flow do ... end` macro for graph wiring
-- `Phlox.FanOutNode` — mid-flow fan-out with sub-flow per item
-- `Phlox.Monitor` — real-time flow tracking via ETS + telemetry
-- `Phlox.Adapter.Phoenix` — LiveView mixin with `phlox_subscribe/2`
-- `Phlox.Adapter.Datastar` — SSE streaming via Plug
-
-## [0.1.0] — 2026-04-04
+## [0.4.0] — 2026-04-05
 
 ### Added
 
-- `Phlox.Node` behaviour with prep → exec → post lifecycle
-- `Phlox.BatchNode` — sequential and parallel batch processing
-- `Phlox.BatchFlow` — full-flow fan-out with param overrides
-- `Phlox.Graph` — builder API for wiring nodes into flows
-- `Phlox.Flow` — `%Flow{}` struct with `run/2`
-- `Phlox.Runner` — pure orchestration loop (zero OTP coupling)
-- `Phlox.Retry` — configurable retry with `exec_fallback/3`
-- `Phlox.FlowServer` — GenServer wrapper with run/step/state/reset
-- `Phlox.Telemetry` — soft-dep telemetry emission
-- Graph validation on `to_flow!/1` — catches missing start nodes, unknown successors
+- **`Phlox.Middleware`** — composable hook behaviour around the node lifecycle.
+  Onion model: `before_node` fires in list order, `after_node` in reverse.
+  Supports `{:cont, shared, action}` and `{:halt, reason}` returns.
+- **`Phlox.Pipeline`** — middleware-aware orchestrator. Drop-in alternative
+  to `Phlox.Runner` when you need hooks. Accepts `middlewares:`, `run_id:`,
+  and `metadata:` options.
+- **`Phlox.HaltedError`** — structured error raised when a middleware halts,
+  carrying the module name and phase for diagnostics.
+- **`Phlox.Checkpoint`** — behaviour for persistent flow state
+  (`save/load/load_at/delete/list`).
+- **`Phlox.Checkpoint.Memory`** — in-memory (Agent-backed) adapter for
+  development and testing.
+- **`Phlox.Checkpoint.Ecto`** — append-only event log adapter. Stores
+  `node_completed`/`flow_completed`/`flow_errored` events with full
+  `shared` snapshots.
+- **`Phlox.Middleware.Checkpoint`** — wires the checkpoint behaviour into
+  the middleware pipeline. Automatic save after every node.
+- **`Phlox.resume/2` and `Phlox.rewind/2`** — resume from the latest
+  checkpoint or rewind to a specific node in the event log.
+- **`mix phlox.gen.migration`** — generates the `phlox_flow_events` Ecto
+  migration.
+- **`FlowServer` middleware routing** — `:middlewares` and `:resume`
+  options accepted by `FlowServer.start_link/1`.
+
+### Changed
+
+- `Phlox.Runner` remains untouched — zero-dependency, zero-middleware
+  baseline. `Pipeline` is the composition-aware alternative.
+
+---
+
+## [0.3.0] — 2026-04-04
+
+### Added
+
+- **`Phlox.FlowServer`** — GenServer wrapping flow execution with
+  async start, status queries, and cancellation.
+- **`Phlox.FlowSupervisor`** — DynamicSupervisor for concurrent flow
+  instances with configurable limits.
+- **`Phlox.Telemetry`** — `:telemetry` events for flow start, node
+  start/stop, flow complete/error. Spans and measurements included.
+- **`Phlox.BatchNode`** and **`Phlox.BatchFlow`** — parallel execution
+  of node lifecycles over batched inputs.
+- **`Phlox.Retry`** — configurable retry with exponential backoff and
+  jitter. Per-node retry options via `retry_opts` in node params.
+
+---
+
+## [0.2.0] — 2026-04-03
+
+### Added
+
+- **`Phlox.Graph`** — compile-time graph builder with validation (missing
+  start node, unknown successors, overwritten action warnings).
+- **`Phlox.Flow`** — struct holding graph + start_id + metadata.
+- **`Phlox.Runner`** — pure recursive orchestration loop. No GenServer,
+  no side effects beyond calling node callbacks.
+- **`Phlox.Node`** — behaviour defining `prep/2`, `exec/2`, `post/4`.
+
+---
+
+## [0.1.0] — 2026-04-02
+
+### Added
+
+- Initial port of [PocketFlow](https://github.com/The-Pocket/PocketFlow)
+  to Elixir. Core abstractions: Node behaviour, Graph builder, Runner,
+  Flow struct. 217 tests passing.
+
+---
+
+[0.5.0]: https://github.com/Xs-and-10s/phlox/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Xs-and-10s/phlox/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Xs-and-10s/phlox/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Xs-and-10s/phlox/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Xs-and-10s/phlox/releases/tag/v0.1.0

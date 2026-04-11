@@ -1,863 +1,357 @@
-# 🌸 Phlox
+# Phlox
 
 [![Hex.pm](https://img.shields.io/hexpm/v/phlox.svg)](https://hex.pm/packages/phlox)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/phlox)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/phlox)
+[![License](https://img.shields.io/hexpm/l/phlox.svg)](LICENSE)
 
-**A graph-based orchestration engine for Elixir — built for AI agent pipelines, general enough for anything.**
+Graph-based orchestration engine for AI agent pipelines in Elixir.
 
-> Phlox is an Elixir port of [PocketFlow](https://github.com/The-Pocket/PocketFlow) by The Pocket,
-> redesigned around Elixir idioms: explicit data threading, `Behaviour`-based nodes,
-> and a pure orchestration loop built from the ground up for OTP supervision.
+Phlox gives you a three-phase node lifecycle (**prep → exec → post**),
+declarative graph wiring, composable middleware, persistent checkpointing
+with resume and rewind, batch flows, OTP supervision, and adapters for
+Phoenix LiveView and Datastar SSE — all in a library small enough to read
+in an afternoon.
 
----
-
-```
-Current LLM frameworks are bloated.
-You only need one clean abstraction: a graph.
-```
-
-Phlox gives you that graph — plus OTP supervision, composable middleware,
-persistent checkpoints with rewind, typed shared state, node-declared
-interceptors, and swappable LLM providers — in a library that fits
-comfortably in your head.
-
----
-
-## Table of Contents
-
-- [Why Phlox?](#why-phlox)
-- [Installation](#installation)
-- [Core Concept: The Graph](#core-concept-the-graph)
-- [Your First Flow](#your-first-flow)
-- [Node Lifecycle In Depth](#node-lifecycle-in-depth)
-- [Routing and Branching](#routing-and-branching)
-- [Retry Logic](#retry-logic)
-- [Batch Processing](#batch-processing)
-- [Fan-Out: Mid-Flow Sub-Flows](#fan-out-mid-flow-sub-flows)
-- [The DSL](#the-dsl)
-- [Middleware](#middleware)
-- [Checkpoints and Resume](#checkpoints-and-resume)
-- [Typed Shared State](#typed-shared-state)
-- [Interceptors](#interceptors)
-- [OTP: Supervised Flows](#otp-supervised-flows)
-- [Real-Time Monitoring](#real-time-monitoring)
-- [Adapters: Phoenix and Datastar](#adapters-phoenix-and-datastar)
-- [LLM Providers](#llm-providers)
-- [Telemetry](#telemetry)
-- [Design Patterns](#design-patterns)
-- [Testing Your Nodes](#testing-your-nodes)
-- [API Reference](#api-reference)
-- [Attribution](#attribution)
-
----
-
-## Why Phlox?
-
-Most LLM orchestration frameworks make three mistakes:
-
-1. **Too much magic** — implicit state, hidden retries, framework-owned I/O clients
-2. **Not enough OTP** — no supervision, no fault tolerance, no introspection
-3. **Hard to test** — nodes are tangled with the graph; you can't test them in isolation
-
-Phlox fixes all three. A node is just a module. The graph is just a map. State is just
-a map passed by value. Every node is independently testable. Every flow runs under OTP supervision.
-
-| | LangChain | CrewAI | Phlox |
-|---|---|---|---|
-| Core abstraction | Chain / Agent | Crew / Task | Graph of nodes |
-| Elixir-native | ✗ | ✗ | ✓ |
-| OTP supervision | ✗ | ✗ | ✓ |
-| Composable middleware | ✗ | ✗ | ✓ |
-| Persistent checkpoints | ✗ | ✗ | ✓ |
-| Typed shared state | ✗ | ✗ | ✓ |
-| Node-declared interceptors | ✗ | ✗ | ✓ |
-| Step-through debugging | ✗ | ✗ | ✓ |
-| Real-time monitoring | ✗ | ✗ | ✓ |
-| Node isolation | ✗ | ✗ | ✓ |
-| Zero required runtime deps | ✗ | ✗ | ✓ |
+Phlox is an Elixir adaptation of
+[PocketFlow](https://github.com/The-Pocket/PocketFlow) by
+[The Pocket](https://github.com/The-Pocket), redesigned around explicit
+data threading, behaviours, and OTP.
 
 ---
 
 ## Installation
 
+Add `phlox` to your dependencies in `mix.exs`:
+
 ```elixir
-# mix.exs
 def deps do
   [
-    {:phlox, "~> 0.3"},
-
-    # Optional — enables telemetry events + Monitor
-    {:telemetry, "~> 1.0"},
-
-    # Optional — enables typed shared state with full spec algebra
-    {:gladius, "~> 0.6"},
-
-    # Optional — enables LLM provider adapters
-    {:req, "~> 0.5"},
-
-    # Optional — enables Ecto checkpoint adapter
-    {:ecto_sql, "~> 3.0"},
-    {:postgrex, ">= 0.0.0"},
-
-    # Optional — enables Phoenix adapter
-    {:phoenix_live_view, "~> 1.0"},
+    {:phlox, "~> 0.5"}
   ]
 end
 ```
 
-Phlox has **zero required runtime dependencies**. Every integration — telemetry,
-Gladius, Ecto, Phoenix, Datastar — activates automatically when its deps are
-present. No configuration needed.
+Then run `mix deps.get`.
+
+### Optional dependencies
+
+Phlox's core has zero required dependencies beyond `:telemetry`. Adapters
+and checkpoint stores pull in their own deps only when you use them:
+
+| Feature | Dependency | When needed |
+|---|---|---|
+| `Phlox.Component` (spinner) | `phoenix_live_view ~> 1.0` | Phoenix apps using the HEEx spinner component |
+| `Phlox.Checkpoint.Ecto` | `ecto_sql ~> 3.10` | Persistent checkpointing via Ecto |
 
 ---
 
-## Core Concept: The Graph
+## Quick start
 
-Everything in Phlox is a **directed graph of nodes**.
-
-```
-[FetchNode] ──default──▶ [ParseNode] ──default──▶ [StoreNode]
-     │
-     └──"error"──▶ [ErrorNode]
-```
-
-- **Nodes** are Elixir modules implementing `Phlox.Node`. They receive data, do
-  work, and pass updated data forward.
-- **Edges** are action strings returned by `post/4`. Phlox follows the matching
-  edge to find the next node.
-- **Shared state** is a plain `%{}` map threaded through every node by value —
-  no mutation, no hidden state, no surprises.
-
----
-
-## Your First Flow
+Define nodes by implementing the `Phlox.Node` behaviour:
 
 ```elixir
 defmodule MyApp.FetchNode do
-  use Phlox.Node
+  @behaviour Phlox.Node
 
-  def prep(shared, _params), do: Map.fetch!(shared, :url)
+  @impl true
+  def prep(shared, _params), do: shared[:url]
 
-  def exec(url, _params) do
-    case HTTPoison.get(url) do
-      {:ok, %{status_code: 200, body: body}} -> {:ok, body}
-      {:ok, %{status_code: code}}            -> {:error, "HTTP #{code}"}
-      {:error, reason}                       -> {:error, inspect(reason)}
-    end
-  end
+  @impl true
+  def exec(url, _params), do: HTTPClient.get!(url).body
 
-  def post(shared, _prep, {:ok, body}, _params) do
-    {:default, Map.put(shared, :body, body)}
-  end
-
-  def post(shared, _prep, {:error, reason}, _params) do
-    {"error", Map.put(shared, :error, reason)}
+  @impl true
+  def post(shared, _url, body, _params) do
+    {:next, Map.put(shared, :body, body)}
   end
 end
 
-defmodule MyApp.WordCountNode do
-  use Phlox.Node
+defmodule MyApp.ParseNode do
+  @behaviour Phlox.Node
 
-  def prep(shared, _params), do: Map.fetch!(shared, :body)
-  def exec(body, _params), do: body |> String.split(~r/\s+/, trim: true) |> length()
+  @impl true
+  def prep(shared, _params), do: shared[:body]
 
-  def post(shared, _prep, count, _params) do
-    {:default, Map.put(shared, :word_count, count)}
+  @impl true
+  def exec(body, _params), do: Jason.decode!(body)
+
+  @impl true
+  def post(shared, _body, parsed, _params) do
+    {:done, Map.put(shared, :parsed, parsed)}
   end
 end
+```
 
-# Wire the graph
-alias Phlox.Graph
+Wire them into a flow:
 
+```elixir
 flow =
-  Graph.new()
-  |> Graph.add_node(:fetch, MyApp.FetchNode, %{}, max_retries: 3)
-  |> Graph.add_node(:count, MyApp.WordCountNode, %{})
-  |> Graph.connect(:fetch, :count)
-  |> Graph.start_at(:fetch)
-  |> Graph.to_flow!()
+  Phlox.Graph.new()
+  |> Phlox.Graph.add_node(:fetch, MyApp.FetchNode)
+  |> Phlox.Graph.add_node(:parse, MyApp.ParseNode)
+  |> Phlox.Graph.add_edge(:fetch, :next, :parse)
+  |> Phlox.Graph.build!(:fetch)
 
-# Run it
-{:ok, result} = Phlox.run(flow, %{url: "https://example.com"})
-IO.puts("Word count: #{result.word_count}")
+shared = %{url: "https://api.example.com/data"}
+result = Phlox.Runner.run(flow, shared)
+# => %{url: "...", body: "...", parsed: %{...}}
 ```
 
 ---
 
-## Node Lifecycle In Depth
+## Core concepts
 
-Every node runs three phases:
+### The three-phase lifecycle
 
-```
-shared ──▶ prep(shared, params)
-                │
-                ▼ prep_res
-           exec(prep_res, params)   ◀── retry loop + interceptors wrap this
-                │
-                ▼ exec_res
-           post(shared, prep_res, exec_res, params)
-                │
-                ▼ {action, new_shared}
-```
+Every node implements three callbacks:
 
-**`prep/2`** — Reads from `shared`, returns data for `exec`. Pure, no side effects.
+1. **`prep/2`** — extract what you need from `shared` (the flowing state map)
+2. **`exec/2`** — do the work (LLM call, HTTP request, computation). This is
+   the only phase that retries on failure.
+3. **`post/4`** — merge results back into `shared` and return an action atom
+   that determines the next node
 
-**`exec/2`** — Does the work: HTTP calls, LLM requests, DB queries. Has **no access
-to `shared`** — only what `prep` handed it. This is what makes every node
-independently testable.
+This separation keeps side effects in `exec` and routing logic in `post`.
+`shared` is an explicit data thread — no hidden process state, no magic
+assigns.
 
-**`post/4`** — Updates state and decides the next action. Returns `{action, new_shared}`.
-Use `:default` for the normal forward path.
-
-**`exec_fallback/3`** — Called when all retries are exhausted. Default re-raises.
-Override to degrade gracefully.
-
----
-
-## Routing and Branching
-
-Branches are pattern-matched `post/4` clauses returning different action strings.
+### Graph wiring
 
 ```elixir
-defmodule MyApp.RouterNode do
-  use Phlox.Node
-
-  def prep(shared, _p), do: Map.fetch!(shared, :request_type)
-  def exec(type, _p), do: type
-
-  def post(shared, _p, :summarise, _p2), do: {"summarise", shared}
-  def post(shared, _p, :translate, _p2), do: {"translate", shared}
-  def post(shared, _p, _unknown,   _p2), do: {"error",     shared}
-end
+Phlox.Graph.new()
+|> Phlox.Graph.add_node(:classify, ClassifyNode)
+|> Phlox.Graph.add_node(:summarize, SummarizeNode)
+|> Phlox.Graph.add_node(:translate, TranslateNode)
+|> Phlox.Graph.add_edge(:classify, :text, :summarize)
+|> Phlox.Graph.add_edge(:classify, :foreign, :translate)
+|> Phlox.Graph.build!(:classify)
 ```
 
----
+`build!/2` validates at compile time: missing start node, unknown successor
+references, and overwritten action edges all raise or warn.
 
-## Retry Logic
+### Retry
+
+Per-node retry with exponential backoff and jitter:
 
 ```elixir
-Graph.add_node(:fetch, MyApp.FetchNode, %{}, max_retries: 3, wait_ms: 1000)
+Phlox.Graph.add_node(:llm_call, MyLLMNode,
+  retry_opts: [max_attempts: 3, base_delay: 1_000, max_delay: 10_000]
+)
 ```
 
-With `max_retries: 3, wait_ms: 1000`:
+Only `exec/2` retries. `prep` and `post` are deterministic — if they fail,
+the bug is in your code, not in a flaky external service.
 
-```
-attempt 1 → raises → sleep 1000ms
-attempt 2 → raises → sleep 1000ms
-attempt 3 → raises → exec_fallback/3 called
-```
+### Batch flows
 
----
-
-## Batch Processing
-
-**Sequential:** Implement `exec_one/2`. `prep/2` returns the list.
-
-```elixir
-defmodule MyApp.TranslateManyNode do
-  use Phlox.BatchNode
-
-  def prep(shared, _p), do: Map.fetch!(shared, :texts)
-  def exec_one(text, params), do: MyLLM.translate(text, to: params.target_language)
-  def post(shared, _prep, translations, _p), do: {:default, Map.put(shared, :translations, translations)}
-end
-```
-
-**Parallel:** Add `parallel: true`. Results are always in input order.
-
-```elixir
-use Phlox.BatchNode, parallel: true, max_concurrency: 10, timeout: 15_000
-```
+`Phlox.BatchNode` and `Phlox.BatchFlow` execute the node lifecycle in
+parallel across batched inputs. Same three-phase contract, automatic
+fan-out/fan-in.
 
 ---
 
 ## Middleware
 
-Middleware wraps the entire node lifecycle — `before_node` fires before `prep`,
-`after_node` fires after `post`. Middlewares compose in onion order.
-
-```
-before_node (mw1 → mw2 → mw3)
-  │
-  prep → exec → post            ← node work
-  │
-after_node  (mw3 → mw2 → mw1)
-```
-
-### Implementing a middleware
-
-```elixir
-defmodule MyApp.Middleware.CostTracker do
-  @behaviour Phlox.Middleware
-
-  @impl true
-  def before_node(shared, _ctx) do
-    {:cont, Map.put(shared, :_node_start, System.monotonic_time())}
-  end
-
-  @impl true
-  def after_node(shared, action, _ctx) do
-    elapsed = System.monotonic_time() - shared._node_start
-    costs = Map.update(shared, :_costs, [elapsed], &[elapsed | &1])
-    {:cont, Map.delete(costs, :_node_start), action}
-  end
-end
-```
-
-### Using middleware
+`Phlox.Pipeline` is a middleware-aware orchestrator. It wraps each node's
+lifecycle in an onion of hooks:
 
 ```elixir
 Phlox.Pipeline.orchestrate(flow, flow.start_id, shared,
+  run_id: "ingest-run-42",
   middlewares: [
-    Phlox.Middleware.Validate,     # typed state enforcement
-    MyApp.Middleware.CostTracker,  # cost tracking
-    Phlox.Middleware.Checkpoint    # persistent checkpoints
+    MyApp.Middleware.CostTracker,
+    Phlox.Middleware.Checkpoint
   ],
-  run_id: "my-run-001",
-  metadata: %{checkpoint: {Phlox.Checkpoint.Memory, []}}
-)
-```
-
-### Halting
-
-Return `{:halt, reason}` from any callback to abort the flow. The pipeline
-raises `Phlox.HaltedError` with the reason, node id, middleware module, and
-phase (`:before_node` or `:after_node`).
-
----
-
-## Checkpoints and Resume
-
-Checkpoint middleware persists `shared` after each node completes, creating
-an append-only event log. Flows survive restarts, and you can rewind to any
-node to re-execute from a known-good state.
-
-### Enabling checkpoints
-
-```elixir
-# In-memory (development/testing)
-{:ok, _} = Phlox.Checkpoint.Memory.start_link()
-
-Phlox.Pipeline.orchestrate(flow, flow.start_id, shared,
-  middlewares: [Phlox.Middleware.Checkpoint],
-  run_id: "ingest-001",
   metadata: %{
-    checkpoint: {Phlox.Checkpoint.Memory, []},
-    flow_name: "IngestPipeline"
-  }
-)
-
-# Ecto/Postgres (production)
-# 1. Add {:ecto_sql, "~> 3.0"} to deps
-# 2. Run: mix phlox.gen.migration && mix ecto.migrate
-Phlox.Pipeline.orchestrate(flow, flow.start_id, shared,
-  middlewares: [Phlox.Middleware.Checkpoint],
-  run_id: "ingest-001",
-  metadata: %{
-    checkpoint: {Phlox.Checkpoint.Ecto, repo: MyApp.Repo},
-    flow_name: "IngestPipeline"
+    checkpoint: {Phlox.Checkpoint.Ecto, repo: MyApp.Repo}
   }
 )
 ```
 
-### Resume after crash
+`before_node` fires in list order, `after_node` in reverse (first in, last
+out). Any middleware can halt the flow with `{:halt, reason}`, which raises
+`Phlox.HaltedError` with the module name and phase for diagnostics.
 
-```elixir
-{:ok, result} = Phlox.Resume.resume("ingest-001",
-  flow: my_flow,
-  checkpoint: {Phlox.Checkpoint.Ecto, repo: MyApp.Repo}
-)
-```
-
-### Rewind to a specific node
-
-Detected a hallucination at node `:embed`? Rewind to the checkpoint saved
-after `:chunk` and re-execute everything downstream:
-
-```elixir
-{:ok, result} = Phlox.Resume.rewind("ingest-001", :chunk,
-  flow: my_flow,
-  checkpoint: {Phlox.Checkpoint.Ecto, repo: MyApp.Repo}
-)
-```
-
-### Checkpoint history
-
-Every node completion is an immutable event with a monotonic sequence number:
-
-```elixir
-{:ok, history} = Phlox.Checkpoint.Memory.history("ingest-001")
-# [
-#   %{sequence: 1, node_id: :fetch, next_node_id: :parse, event_type: :node_completed, ...},
-#   %{sequence: 2, node_id: :parse, next_node_id: :embed, event_type: :node_completed, ...},
-#   %{sequence: 3, node_id: :embed, next_node_id: nil,    event_type: :flow_completed, ...}
-# ]
-```
+`Phlox.Runner` remains the zero-dependency, zero-middleware baseline. Use it
+when you don't need hooks.
 
 ---
 
-## Typed Shared State
+## Checkpointing, resume, and rewind
 
-Declare what `shared` must look like entering and leaving each node.
-Uses [Gladius](https://hex.pm/packages/gladius) for the full spec algebra,
-or plain functions as a zero-dep fallback.
+`Phlox.Checkpoint.Ecto` writes an append-only event log — one row per node
+completion. This gives you:
 
-### With Gladius
-
-```elixir
-defmodule MyApp.EmbedNode do
-  use Phlox.Node
-  use Phlox.Typed
-
-  import Gladius
-
-  input open_schema(%{
-    required(:text)     => string(:filled?),
-    required(:language) => string(:filled?)
-  })
-
-  output open_schema(%{
-    required(:text)      => string(:filled?),
-    required(:language)  => string(:filled?),
-    required(:embedding) => list_of(spec(is_list()))
-  })
-
-  def prep(shared, _p), do: {shared.text, shared.language}
-  def exec({text, lang}, _p), do: MyLLM.embed(text, lang)
-  def post(shared, _p, emb, _p2), do: {:default, Map.put(shared, :embedding, emb)}
-end
-```
-
-Gladius specs are parse-don't-validate: `conform/2` returns a **shaped** value
-with coercions, transforms, and defaults applied. The middleware replaces
-`shared` with the shaped output, so specs actively participate in data flow.
-
-### Without Gladius (plain functions)
+- **Resume** from the latest checkpoint after a crash
+- **Rewind** to any prior node (e.g., re-execute after detecting a
+  hallucination three nodes downstream)
+- Full audit trail of every node transition
 
 ```elixir
-input fn shared ->
-  if is_binary(shared[:text]), do: :ok, else: {:error, ":text required"}
-end
-```
+# Generate the migration
+mix phlox.gen.migration
 
-### Enabling validation
+# Resume from latest checkpoint
+{:ok, checkpoint} = Phlox.Checkpoint.Ecto.load("run-42", repo: MyApp.Repo)
+Phlox.resume(checkpoint, flow: my_flow, middlewares: [...])
 
-```elixir
-Phlox.Pipeline.orchestrate(flow, flow.start_id, shared,
-  middlewares: [Phlox.Middleware.Validate]
+# Rewind to a specific node
+{:ok, checkpoint} = Phlox.Checkpoint.Ecto.load_at("run-42",
+  node_id: :chunk,
+  repo: MyApp.Repo
 )
+Phlox.resume(checkpoint, flow: my_flow, middlewares: [...])
 ```
 
-Nodes without specs are silently skipped — safe to include globally.
+For development and testing, `Phlox.Checkpoint.Memory` provides an
+Agent-backed in-memory adapter with the same interface.
 
 ---
 
-## Interceptors
-
-Interceptors are the complement to middleware. Where middleware wraps the
-entire node lifecycle and is configured at the **pipeline** level, interceptors
-wrap **just `exec/2`** and are declared by the **node itself**.
-
-```
-Middleware = what the framework does to every node.
-Interceptors = what nodes declare they want done to themselves.
-```
-
-### Declaring interceptors
-
-```elixir
-defmodule MyApp.EmbedNode do
-  use Phlox.Node
-
-  intercept MyApp.Interceptor.Cache, ttl: :timer.minutes(5)
-  intercept MyApp.Interceptor.RateLimit, max: 10, per: :second
-
-  def exec(text, _params), do: MyLLM.embed(text)
-end
-```
-
-### How they execute
-
-Interceptors run inside the retry loop, wrapping each attempt:
-
-```
-Retry loop:
-  attempt 1 → before_exec → exec → after_exec → (raises)
-  attempt 2 → before_exec → exec → after_exec → success
-```
-
-### Implementing an interceptor
-
-```elixir
-defmodule MyApp.Interceptor.Cache do
-  @behaviour Phlox.Interceptor
-
-  @impl true
-  def before_exec(prep_res, ctx) do
-    case lookup(prep_res, ctx.interceptor_opts[:ttl]) do
-      {:hit, value} -> {:skip, value}   # short-circuit exec entirely
-      :miss         -> {:cont, prep_res}
-    end
-  end
-
-  @impl true
-  def after_exec(exec_res, ctx) do
-    store(ctx.prep_res, exec_res, ctx.interceptor_opts[:ttl])
-    {:cont, exec_res}
-  end
-end
-```
-
-### Access boundary
-
-Interceptors see `prep_res` and `exec_res` but **not** `shared`. They cannot
-change routing. This is the fundamental distinction from middleware.
-
----
-
-## OTP: Supervised Flows
+## OTP integration
 
 ### FlowServer
 
-Wraps a flow in a GenServer with middleware and interceptor support:
+`Phlox.FlowServer` is a GenServer wrapping flow execution with async start,
+status queries, cancellation, and optional middleware/resume support:
 
 ```elixir
 {:ok, pid} = Phlox.FlowServer.start_link(
   flow: my_flow,
   shared: %{url: "..."},
-  middlewares: [Phlox.Middleware.Validate, Phlox.Middleware.Checkpoint],
-  run_id: "job-001",
-  metadata: %{checkpoint: {Phlox.Checkpoint.Memory, []}}
+  middlewares: [Phlox.Middleware.Checkpoint]
 )
 
-# Run to completion
-{:ok, final} = Phlox.FlowServer.run(pid)
-
-# Or step through with middleware hooks firing per step
-{:continue, :parse, shared} = Phlox.FlowServer.step(pid)
-{:done, final}              = Phlox.FlowServer.step(pid)
-
-# Resume from checkpoint
-{:ok, pid} = Phlox.FlowServer.start_link(
-  flow: my_flow,
-  resume: "job-001",
-  checkpoint: {Phlox.Checkpoint.Memory, []}
-)
+Phlox.FlowServer.status(pid)
+# => :running | {:done, result} | {:error, reason}
 ```
 
 ### FlowSupervisor
 
-Spawn named flows at runtime under a DynamicSupervisor:
-
-```elixir
-{:ok, _} = Phlox.FlowSupervisor.start_flow(:my_job, flow, shared)
-{:ok, result} = Phlox.FlowServer.run(Phlox.FlowSupervisor.server(:my_job))
-
-Phlox.FlowSupervisor.running()    # => [:my_job, ...]
-Phlox.FlowSupervisor.stop_flow(:my_job)
-```
+`Phlox.FlowSupervisor` is a DynamicSupervisor for running concurrent flow
+instances with configurable limits.
 
 ---
 
-## Real-Time Monitoring
-
-`Phlox.Monitor` tracks every running flow in ETS via telemetry events.
-
-```elixir
-# Query
-snapshot = Phlox.Monitor.get("my-flow-id")
-
-# Subscribe
-:ok = Phlox.Monitor.subscribe("my-flow-id")
-receive do
-  {:phlox_monitor, :node_done, snapshot} -> IO.inspect(snapshot)
-end
-```
-
----
-
-## Adapters: Phoenix and Datastar
-
-Both adapters read from `Phlox.Monitor`. A Phoenix app using Datastar for its
-frontend can run both simultaneously.
+## Adapters
 
 ### Phoenix LiveView
 
-```elixir
-defmodule MyAppWeb.JobLive do
-  use MyAppWeb, :live_view
-  use Phlox.Adapter.Phoenix
-
-  def mount(%{"flow_id" => flow_id}, _session, socket) do
-    {:ok, phlox_subscribe(socket, flow_id)}
-  end
-end
-```
+`Phlox.Adapter.Phoenix` streams flow progress into LiveView assigns. Use
+the built-in `FlowMonitor` component or build your own with telemetry events.
 
 ### Datastar SSE
 
-```elixir
-# In your router
-get "/phlox/stream/:flow_id", Phlox.Adapter.Datastar.Plug, []
+`Phlox.Adapter.Datastar` provides a Plug that streams SSE events compatible
+with Datastar's `datastar-patch-signals` and `datastar-patch-elements` event
+types. Bind your UI to flow status signals:
+
+```html
+<span class="phlox-spinner"
+      data-class:spinning="$flow_status === 'streaming'">
+  <span class="phlox-ring phlox-ring-outer"></span>
+  <span class="phlox-ring phlox-ring-middle"></span>
+  <span class="phlox-ring phlox-ring-inner"></span>
+</span>
 ```
 
 ---
 
-## LLM Providers
+## The Phlox spinner
 
-Phlox ships with a `Phlox.LLM` behaviour and adapters for major providers.
-The provider is injected via node `params` — swapping is one line.
+Phlox ships a branded three-ring loading indicator. Three concentric rings
+spin at different speeds and directions, evoking petals in motion. When the
+flow completes, the rings collapse to a point, hold briefly, then bloom back
+to their idle positions — a visual confirmation beat.
 
-### Available adapters
+The idle state doubles as a logo mark. The favicon is derived from it.
 
-| Adapter | Provider | Free tier | Requires |
-|---|---|---|---|
-| `Phlox.LLM.OpenAI` | GPT-4o / GPT-4.1 | $5 free credits | `OPENAI_API_KEY` |
-| `Phlox.LLM.Google` | Gemini via AI Studio | 1,500 req/day | `GOOGLE_AI_KEY` |
-| `Phlox.LLM.Groq` | Llama/Mistral on Groq | 14,400 req/day | `GROQ_API_KEY` |
-| `Phlox.LLM.Anthropic` | Claude API | $5 free credits | `ANTHROPIC_API_KEY` |
-| `Phlox.LLM.Ollama` | Local models | Unlimited | Ollama installed |
-
-`Phlox.LLM.OpenAI` also accepts a `:base_url` option, so it doubles as an
-adapter for Azure OpenAI, OpenRouter, or any OpenAI-compatible endpoint.
-
-### Using in a node
+### Phoenix
 
 ```elixir
-defmodule MyApp.ThinkNode do
-  use Phlox.Node
+# In your layout:
+<link rel="stylesheet" href={~p"/deps/phlox/priv/static/phlox-spinner.css"}>
 
-  def prep(shared, _p), do: shared.prompt
-
-  def exec(prompt, params) do
-    provider = Map.fetch!(params, :llm)
-    messages = [
-      %{role: "system", content: "You are a helpful assistant."},
-      %{role: "user", content: prompt}
-    ]
-    Phlox.LLM.chat!(provider, messages, params[:llm_opts] || [])
-  end
-
-  def post(shared, _p, response, _p2) do
-    {:default, Map.put(shared, :response, response)}
-  end
-end
+# In your LiveView or component:
+<Phlox.Component.spinner spinning={@flow_running} />
+<Phlox.Component.spinner spinning={@flow_running} size="48px" />
 ```
 
-### Swapping providers
+### Datastar / plain HTML
 
-```elixir
-# Development — free
-Graph.add_node(:think, ThinkNode, %{llm: Phlox.LLM.Google, llm_opts: [model: "gemini-2.5-flash"]})
+```html
+<link rel="stylesheet" href="/path/to/phlox-spinner.css">
 
-# Production — highest quality
-Graph.add_node(:think, ThinkNode, %{llm: Phlox.LLM.Anthropic, llm_opts: [model: "claude-sonnet-4-6"]})
+<!-- Idle -->
+<span class="phlox-spinner">
+  <span class="phlox-ring phlox-ring-outer"></span>
+  <span class="phlox-ring phlox-ring-middle"></span>
+  <span class="phlox-ring phlox-ring-inner"></span>
+</span>
+
+<!-- Active -->
+<span class="phlox-spinner spinning">
+  <span class="phlox-ring phlox-ring-outer"></span>
+  <span class="phlox-ring phlox-ring-middle"></span>
+  <span class="phlox-ring phlox-ring-inner"></span>
+</span>
+
+<!-- Datastar toggle -->
+<span class="phlox-spinner"
+      data-class:spinning="$flow_status === 'streaming'">
+  <span class="phlox-ring phlox-ring-outer"></span>
+  <span class="phlox-ring phlox-ring-middle"></span>
+  <span class="phlox-ring phlox-ring-inner"></span>
+</span>
 ```
 
-### Included example: Code Review Brain Trust
+### Collapse-and-bloom transition
 
-```elixir
-{:ok, result} = Phlox.Examples.CodeReview.run(~S"""
-  def fetch_user(id) do
-    query = "SELECT * FROM users WHERE id = #{id}"
-    Repo.query!(query)
-  end
-""",
-  llm: Phlox.LLM.Groq,
-  llm_opts: [model: "llama-3.3-70b-versatile"],
-  language: "elixir"
-)
+To trigger the collapse-and-bloom when stopping (instead of a hard cut),
+add the `collapsing` class after removing `spinning`:
 
-IO.puts(result.final_review)
+```javascript
+const spinner = document.querySelector('.phlox-spinner');
+spinner.classList.remove('spinning');
+spinner.classList.add('collapsing');
+spinner.addEventListener('animationend', () => {
+  spinner.classList.remove('collapsing');
+}, { once: true });
 ```
 
-Three specialist agents (security, logic, style) analyze code from different
-angles, then a synthesizer combines, deduplicates, and ranks findings.
+The rings reset to their idle angles at the midpoint of the collapse while
+invisible, so the bloom always reveals a clean idle state.
+
+### Customization
+
+Override CSS variables to match your brand:
+
+```css
+.phlox-spinner {
+  --phlox-ring-outer: #6366f1;
+  --phlox-ring-middle: #818cf8;
+  --phlox-ring-inner: #a5b4fc;
+  --phlox-ring-track: rgba(255, 255, 255, 0.1);
+  --phlox-spinner-size: 32px;
+}
+```
 
 ---
 
-## Token Compression: Simplect & Complect
+## Telemetry events
 
-Inspired by [caveman](https://github.com/JuliusBrussee/caveman) by Julius
-Brussee. Named after Rich Hickey's "complect" — if braiding things together
-is *complecting*, then stripping to the essence is *simplecting*.
+Phlox emits `:telemetry` events at every lifecycle boundary:
 
-`Phlox.Middleware.Simplect` injects a token-compression system prompt
-pipeline-wide. `Phlox.Interceptor.Complect` overrides the level per node.
-
-### Pipeline-wide compression
-
-```elixir
-Phlox.Pipeline.orchestrate(flow, flow.start_id, shared,
-  middlewares: [Phlox.Middleware.Simplect, Phlox.Middleware.Checkpoint],
-  metadata: %{simplect: :full}
-)
-```
-
-### Per-node overrides
-
-```elixir
-defmodule MyApp.Nodes.Classifier do
-  use Phlox.Node
-  intercept Phlox.Interceptor.Complect, level: :ultra  # maximum compression
-
-  def prep(shared, _p), do: [%{role: "system", content: shared.system_prompt},
-                              %{role: "user", content: shared.text}]
-  def exec(msgs, p), do: Phlox.LLM.Groq.chat(msgs, p)
-  def post(shared, _, {:ok, label}, _), do: {:default, Map.put(shared, :label, label)}
-end
-
-defmodule MyApp.Nodes.UserReport do
-  use Phlox.Node
-  intercept Phlox.Interceptor.Complect, level: :off  # full prose for humans
-
-  def prep(shared, _p), do: [%{role: "system", content: shared.system_prompt},
-                              %{role: "user", content: "Summarize: #{shared.analysis}"}]
-  def exec(msgs, p), do: Phlox.LLM.Anthropic.chat(msgs, p)
-  def post(shared, _, {:ok, text}, _), do: {:default, Map.put(shared, :report, text)}
-end
-```
-
-### Direct usage (no pipeline)
-
-```elixir
-[%{role: "user", content: "Explain GenServer"}]
-|> Phlox.Simplect.wrap(:ultra)
-|> Phlox.LLM.Groq.chat(model: "llama-3.3-70b-versatile")
-```
-
-### Intensity levels
-
-| Level   | Style                                      | Token savings |
-|---------|--------------------------------------------|---------------|
-| `:lite` | Drop filler, keep grammar                  | ~40%          |
-| `:full` | Drop articles, fragments OK, short synonyms| ~65%          |
-| `:ultra`| Abbreviate, arrows, maximum compression    | ~75%          |
-
----
-
-## Telemetry
-
-Phlox emits telemetry events when `:telemetry` is present. Zero overhead when absent.
-
-| Event | Measurements | When |
+| Event | Measurements | Metadata |
 |---|---|---|
-| `[:phlox, :flow, :start]` | `system_time` | flow begins |
-| `[:phlox, :flow, :stop]` | `duration` | flow finishes |
-| `[:phlox, :node, :start]` | `system_time` | before `prep/2` |
-| `[:phlox, :node, :stop]` | `duration` | after `post/4` |
-| `[:phlox, :node, :exception]` | `duration` | node raises after all retries |
+| `[:phlox, :flow, :start]` | `system_time` | `flow`, `shared`, `run_id` |
+| `[:phlox, :node, :start]` | `system_time` | `node_id`, `node`, `shared` |
+| `[:phlox, :node, :stop]` | `duration` | `node_id`, `action`, `shared` |
+| `[:phlox, :flow, :stop]` | `duration` | `flow`, `shared`, `run_id` |
+| `[:phlox, :flow, :exception]` | `duration` | `flow`, `kind`, `reason`, `stacktrace` |
 
----
-
-## Design Patterns
-
-### Simple Pipeline
-
-```elixir
-defmodule MyApp.IngestFlow do
-  use Phlox.DSL
-
-  node :fetch, FetchNode, %{}, max_retries: 3
-  node :clean, CleanNode, %{}
-  node :embed, EmbedNode, %{model: "ada-002"}
-  node :store, StoreNode, %{}
-
-  connect :fetch, :clean
-  connect :clean, :embed
-  connect :embed, :store
-
-  start_at :fetch
-end
-```
-
-### Agent Loop (ReAct)
-
-```elixir
-connect :think, :act,    action: "continue"
-connect :think, :finish, action: "done"
-connect :act,   :think   # loop back
-```
-
-### Multi-Agent Brain Trust
-
-Three specialists review from different angles, then a synthesizer combines.
-See `Phlox.Examples.CodeReview` for a working implementation.
-
----
-
-## Testing Your Nodes
-
-Because `exec/2` has no access to `shared`, nodes are trivially testable in isolation:
-
-```elixir
-test "translates text to target language" do
-  result = MyApp.TranslateNode.exec(%{text: "hello", language: "fr"}, %{})
-  assert result == {:ok, "bonjour"}
-end
-
-test "routes to :default on success" do
-  {action, new_shared} = MyApp.TranslateNode.post(%{}, nil, {:ok, "bonjour"}, %{})
-  assert action == :default
-  assert new_shared.translation == "bonjour"
-end
-```
-
----
-
-## API Reference
-
-### Module map
-
-```
-Phlox                          top-level: run/2
-Phlox.Node                     behaviour + __using__ macro + intercept
-Phlox.BatchNode                exec_one/2 per item
-Phlox.FanOutNode               sub_flow per item
-Phlox.BatchFlow                full-flow fan-out
-Phlox.DSL                      declarative flow definition
-Phlox.Graph                    builder: new/add_node/connect/start_at/to_flow[!]
-Phlox.Flow                     %Flow{} struct + run/2 (delegates to Pipeline)
-Phlox.Runner                   orchestrate/3 (pure, no middleware, no telemetry)
-Phlox.Pipeline                 orchestrate/4 (middleware + interceptor + telemetry)
-Phlox.Retry                    run/3 (exec with retry + optional interceptor wrapping)
-Phlox.Middleware               behaviour: before_node/2, after_node/3
-Phlox.Middleware.Validate      enforces Phlox.Typed specs at node boundaries
-Phlox.Middleware.Checkpoint    persists shared after each node
-Phlox.Middleware.Simplect      token-compression system prompt injection
-Phlox.Interceptor              behaviour: before_exec/2, after_exec/2 + intercept macro
-Phlox.Interceptor.Complect     per-node simplect level override
-Phlox.Typed                    use macro: input/1, output/1 spec declarations
-Phlox.Checkpoint               behaviour: save/load_latest/load_at/history/delete
-Phlox.Checkpoint.Memory        in-memory adapter (Agent-backed)
-Phlox.Checkpoint.Ecto          Postgres adapter (append-only event log)
-Phlox.Resume                   resume/2, rewind/3
-Phlox.HaltedError              raised when middleware/interceptor halts
-Phlox.FlowServer               GenServer: run/step/state/reset + middleware + resume
-Phlox.FlowSupervisor           DynamicSupervisor: start_flow/stop_flow/whereis
-Phlox.Monitor                  GenServer+ETS: get/list/subscribe/unsubscribe
-Phlox.Telemetry                soft-dep telemetry emission
-Phlox.Adapter.Phoenix          LiveView mixin + FlowMonitor component
-Phlox.Adapter.Datastar         SSE streaming via Plug
-Phlox.LLM                      behaviour: chat/2
-Phlox.LLM.Anthropic            Claude API adapter
-Phlox.LLM.Google               Gemini AI Studio adapter
-Phlox.LLM.Groq                 Groq inference adapter
-Phlox.LLM.Ollama               Local model adapter
-Phlox.LLM.OpenAI               OpenAI / Azure / OpenRouter adapter
-Phlox.Simplect                 token-compression prompt engine (lite/full/ultra)
-```
-
-### Key invariants
-
-1. **`exec/2` has NO access to `shared`** — only what `prep/2` returned.
-2. **`post/4` must return `{action, new_shared}`** — always a tuple.
-3. **Middleware wraps the node lifecycle** — sees `shared` and `action`.
-4. **Interceptors wrap `exec/2`** — sees `prep_res` and `exec_res`, not `shared`.
-5. **Runner stays pure** — Pipeline adds middleware, interceptors, and telemetry on top. `Flow.run/2` and `FlowServer` use Pipeline; call `Runner.orchestrate/3` directly when you need zero side effects (e.g. property-based tests).
-6. **Checkpoint events are append-only** — immutable once written.
-7. **`shared` key `:phlox_flow_id`** is reserved for telemetry. Auto-injected from `run_id` if not provided by the caller.
+Attach handlers with `:telemetry.attach/4` or use the built-in
+`Phlox.Telemetry` module which provides a default logging handler.
 
 ---
 
@@ -865,18 +359,10 @@ Phlox.Simplect                 token-compression prompt engine (lite/full/ultra)
 
 Phlox is a port of **[PocketFlow](https://github.com/The-Pocket/PocketFlow)**
 by [The Pocket](https://github.com/The-Pocket), originally written in Python.
-PocketFlow's three-phase node lifecycle (`prep → exec → post`), graph wiring
-model, and batch flow pattern are the direct inspiration for this library.
-
-The Elixir design — explicit data threading, OTP supervision, behaviour-based
-nodes, composable middleware, persistent checkpoints with rewind, typed shared
-state via [Gladius](https://hex.pm/packages/gladius), node-declared interceptors,
-`FlowServer`, `FlowSupervisor`, `Monitor`, real-time adapters, LLM provider
-abstraction, and telemetry — is Phlox's own contribution.
-
-The Simplect/Complect token compression system is inspired by
-[caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee, and
-named after Rich Hickey's concept of "complected."
+PocketFlow's elegant three-phase node lifecycle, graph wiring model, and batch
+flow pattern are the direct inspiration for this library. The Elixir design —
+explicit data threading, OTP supervision, behaviour-based nodes, middleware,
+checkpointing, and telemetry — is Phlox's own contribution.
 
 ---
 

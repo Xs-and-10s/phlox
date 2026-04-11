@@ -1,7 +1,7 @@
 defmodule Phlox.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.5.0"
   @source_url "https://github.com/Xs-and-10s/phlox"
 
   def project do
@@ -11,51 +11,36 @@ defmodule Phlox.MixProject do
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      aliases: aliases(),
 
-      # Hex
-      name: "Phlox",
-      description: """
-      A graph-based orchestration engine for Elixir — built for AI agent
-      pipelines, general enough for anything. Composable middleware,
-      persistent checkpoints with rewind, typed shared state, node-declared
-      interceptors, and swappable LLM providers. Zero required runtime deps.
-      """,
+      # Hex metadata
+      description:
+        "Graph-based orchestration engine for AI agent pipelines in Elixir. " <>
+          "Three-phase node lifecycle (prep → exec → post), composable middleware, " <>
+          "checkpointing with resume/rewind, batch flows, OTP supervision, " <>
+          "and adapters for Phoenix LiveView and Datastar SSE.",
       package: package(),
-      source_url: @source_url,
 
       # Docs
+      name: "Phlox",
+      source_url: @source_url,
+      homepage_url: @source_url,
       docs: docs()
     ]
   end
 
   def application do
     [
-      extra_applications: [:logger, :crypto],
+      extra_applications: [:logger],
       mod: {Phlox.Application, []}
     ]
   end
 
   defp deps do
     [
-      # Dev/test only
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false},
-      {:stream_data, "~> 1.0", only: [:dev, :test]},
-
-      # Optional — enables telemetry events + Phlox.Monitor
-      {:telemetry, "~> 1.0", optional: true},
-
-      # Optional — enables typed shared state with full spec algebra
-      {:gladius, "~> 0.6", optional: true},
-
-      # Optional — enables LLM provider adapters (Anthropic, Google, Groq, Ollama)
-      {:req, "~> 0.5", optional: true},
-
-      # Optional — enables Phlox.Checkpoint.Ecto adapter
-      # {:ecto_sql, "~> 3.0", optional: true},
-
-      # Optional — enables Phlox.Adapter.Phoenix
-      # {:phoenix_live_view, "~> 1.0", optional: true},
+      {:telemetry, "~> 1.0"},
+      {:phoenix_live_view, "~> 1.0", optional: true},
+      {:ecto_sql, "~> 3.10", optional: true},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
 
@@ -65,87 +50,31 @@ defmodule Phlox.MixProject do
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md",
+        "PocketFlow (original)" => "https://github.com/The-Pocket/PocketFlow"
       },
-      files: ~w(
-        lib
-        mix.exs
-        README.md
-        CHANGELOG.md
-        LICENSE
-      )
+      maintainers: ["Mark Manley"],
+      files:
+        ~w(lib priv/static/phlox-spinner.css priv/static/favicon.ico .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
   defp docs do
     [
-      main: "Phlox",
+      main: "readme",
       source_ref: "v#{@version}",
       source_url: @source_url,
-      extras: ["README.md", "CHANGELOG.md", "LICENSE"],
+      extras: ["README.md", "CHANGELOG.md"],
       groups_for_modules: [
-        "Core": [
-          Phlox,
-          Phlox.Node,
-          Phlox.BatchNode,
-          Phlox.FanOutNode,
-          Phlox.BatchFlow,
-          Phlox.DSL,
-          Phlox.Graph,
-          Phlox.Flow,
-          Phlox.Runner,
-          Phlox.Pipeline,
-          Phlox.Retry
-        ],
-        "Middleware": [
-          Phlox.Middleware,
-          Phlox.Middleware.Validate,
-          Phlox.Middleware.Checkpoint
-        ],
-        "Interceptors": [
-          Phlox.Interceptor
-        ],
-        "Typed State": [
-          Phlox.Typed
-        ],
-        "Checkpoints": [
-          Phlox.Checkpoint,
-          Phlox.Checkpoint.Memory,
-          Phlox.Checkpoint.Ecto
-        ],
-        "Resume / Rewind": [
-          Phlox.Resume,
-          Phlox.HaltedError
-        ],
-        "OTP": [
-          Phlox.FlowServer,
-          Phlox.FlowSupervisor,
-          Phlox.Monitor
-        ],
-        "Adapters": [
-          Phlox.Adapter.Phoenix,
-          Phlox.Adapter.Datastar
-        ],
-        "LLM Providers": [
-          Phlox.LLM,
-          Phlox.LLM.Anthropic,
-          Phlox.LLM.Google,
-          Phlox.LLM.Groq,
-          Phlox.LLM.Ollama
-        ],
-        "Telemetry": [
-          Phlox.Telemetry
-        ],
-        "Examples": [
-          Phlox.Examples.CodeReview
-        ]
+        Core: [Phlox, Phlox.Node, Phlox.BatchNode, Phlox.Flow, Phlox.BatchFlow, Phlox.Graph],
+        Orchestration: [Phlox.Runner, Phlox.Pipeline, Phlox.Retry],
+        Middleware: [Phlox.Middleware, Phlox.Middleware.Checkpoint],
+        Checkpoint: [Phlox.Checkpoint, Phlox.Checkpoint.Memory, Phlox.Checkpoint.Ecto],
+        OTP: [Phlox.FlowServer, Phlox.FlowSupervisor],
+        Adapters: [Phlox.Adapter.Phoenix, Phlox.Adapter.Datastar],
+        UI: [Phlox.Component],
+        Observability: [Phlox.Telemetry]
       ]
-    ]
-  end
-
-  defp aliases do
-    [
-      test: ["test --trace"]
     ]
   end
 end
