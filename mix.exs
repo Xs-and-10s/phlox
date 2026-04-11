@@ -1,7 +1,7 @@
 defmodule Phlox.MixProject do
   use Mix.Project
 
-  @version "0.5.0"
+  @version "0.5.1"
   @source_url "https://github.com/Xs-and-10s/phlox"
 
   def project do
@@ -37,10 +37,29 @@ defmodule Phlox.MixProject do
 
   defp deps do
     [
+      # Required
       {:telemetry, "~> 1.0"},
-      {:phoenix_live_view, "~> 1.0", optional: true},
+
+      # LLM adapters (Phlox.LLM.Groq, .Google, .Anthropic, .OpenAI, .Ollama)
+      {:req, "~> 0.5", optional: true},
+
+      # Checkpoint.Ecto
       {:ecto_sql, "~> 3.10", optional: true},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:postgrex, ">= 0.0.0", optional: true},
+
+      # Adapter.Phoenix + Phlox.Component
+      {:phoenix_live_view, "~> 1.0", optional: true},
+
+      # Adapter.Datastar
+      {:plug, "~> 1.14", optional: true},
+      {:datastar_ex, "~> 0.1", optional: true},
+
+      # Phlox.Typed (Gladius integration)
+      {:gladius, "~> 0.6", optional: true},
+
+      # Dev / test only
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:stream_data, "~> 1.0", only: [:dev, :test]}
     ]
   end
 
@@ -68,6 +87,7 @@ defmodule Phlox.MixProject do
       groups_for_modules: [
         Core: [Phlox, Phlox.Node, Phlox.BatchNode, Phlox.Flow, Phlox.BatchFlow, Phlox.Graph],
         Orchestration: [Phlox.Runner, Phlox.Pipeline, Phlox.Retry],
+        LLM: [Phlox.LLM, Phlox.LLM.Anthropic, Phlox.LLM.Google, Phlox.LLM.Groq, Phlox.LLM.Ollama, Phlox.LLM.OpenAI],
         Middleware: [Phlox.Middleware, Phlox.Middleware.Checkpoint],
         Checkpoint: [Phlox.Checkpoint, Phlox.Checkpoint.Memory, Phlox.Checkpoint.Ecto],
         OTP: [Phlox.FlowServer, Phlox.FlowSupervisor],

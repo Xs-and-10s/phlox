@@ -7,6 +7,29 @@ Phlox adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.5.1] — 2026-04-11
+
+### Fixed
+
+- **Optional deps compilation bug** — LLM adapters, `Phlox.Adapter.Datastar`,
+  `Phlox.Typed` (Gladius), and `Phlox.Adapter.Datastar.Plug` were never
+  compiled when Phlox was used as a Hex dependency because their
+  `Code.ensure_loaded?` guards ran before the consumer's deps were on the
+  code path. Added `optional: true` declarations for `:req`, `:plug`,
+  `:datastar_ex`, and `:gladius` so Mix compiles them before Phlox when
+  present.
+
+### Changed
+
+- **README rewrite** — comprehensive documentation covering all modules,
+  middleware vs. interceptors architecture, checkpointing/resume/rewind,
+  LLM adapter swapping, Simplect/Complect token compression, Monitor,
+  adapters, and the spinner. Full module map for AI agent consumption.
+- Added `.formatter.exs` to Hex package files.
+- Added `phlox-mark.png` logo to README header.
+
+---
+
 ## [0.5.0] — 2026-04-11
 
 ### Added
@@ -109,6 +132,7 @@ Phlox adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+[0.5.1]: https://github.com/Xs-and-10s/phlox/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Xs-and-10s/phlox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Xs-and-10s/phlox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Xs-and-10s/phlox/compare/v0.2.0...v0.3.0
