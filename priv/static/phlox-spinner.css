@@ -1,0 +1,106 @@
+.phlox-spinner {
+    --phlox-spinner-size: 24px;
+    --phlox-ring-outer: #00e676;
+    --phlox-ring-middle: #00c853;
+    --phlox-ring-inner: #00a844;
+    --phlox-ring-track: rgba(255, 255, 255, 0.15);
+    position: relative;
+    display: inline-block;
+    width: var(--phlox-spinner-size);
+    height: var(--phlox-spinner-size);
+}
+
+.phlox-ring {
+    position: absolute;
+    border-radius: 50%;
+    border-style: solid;
+    border-color: var(--phlox-ring-track);
+    box-sizing: border-box;
+}
+
+.phlox-ring-outer {
+    inset: 0;
+    border-width: 2.5px;
+    border-top-color: var(--phlox-ring-outer);
+    transform: rotate(0deg);
+}
+
+.phlox-ring-middle {
+    inset: 17%;
+    border-width: 2px;
+    border-top-color: var(--phlox-ring-middle);
+    transform: rotate(30deg);
+}
+
+.phlox-ring-inner {
+    inset: 29%;
+    border-width: 2px;
+    border-top-color: var(--phlox-ring-inner);
+    transform: rotate(60deg);
+}
+
+/* --- Spin animations --- */
+
+@keyframes phlox-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes phlox-spin-reverse {
+    from {
+        transform: rotate(30deg);
+    }
+    to {
+        transform: rotate(-330deg);
+    }
+}
+
+@keyframes phlox-spin-offset {
+    from {
+        transform: rotate(60deg);
+    }
+    to {
+        transform: rotate(420deg);
+    }
+}
+
+.phlox-spinner.spinning .phlox-ring-outer {
+    animation: phlox-spin 0.7s linear infinite;
+}
+
+.phlox-spinner.spinning .phlox-ring-middle {
+    animation: phlox-spin-reverse 0.875s linear infinite;
+}
+
+.phlox-spinner.spinning .phlox-ring-inner {
+    animation: phlox-spin-offset 1.05s linear infinite;
+}
+
+/* --- Collapse & bloom transition --- */
+
+@keyframes phlox-collapse-bloom {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+        animation-timing-function: cubic-bezier(0.55, 0, 0.67, 0.02);
+    }
+    30% {
+        transform: scale(0);
+        opacity: 0;
+        animation-timing-function: linear;
+    }
+    55% {
+        transform: scale(0);
+        opacity: 0;
+        animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.phlox-spinner.collapsing {
+    animation: phlox-collapse-bloom 0.8s forwards;
+}
