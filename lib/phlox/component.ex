@@ -45,7 +45,7 @@ defmodule Phlox.Component do
   attr :class, :string, default: ""
 
   def spinner(assigns) do
-    ~H\"""
+    ~H"""
     <span
       class={["phlox-spinner", @spinning && "spinning", @class]}
       style={"--phlox-spinner-size: #{@size}"}
@@ -56,6 +56,6 @@ defmodule Phlox.Component do
       <span class="phlox-ring phlox-ring-middle"></span>
       <span class="phlox-ring phlox-ring-inner"></span>
     </span>
-    \"""
+    """
   end
 end
